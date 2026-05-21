@@ -210,7 +210,7 @@ async def ingest_signals(body: SignalIngestRequest):
           "entry_price": 67250.5,
           "sl_price": 66500.0,
           "tp_price": 68500.0,
-          "confidence": 0.85,
+          "confidence": "high",
           "regime": "TREND_UP",
           "play": "PLAY01"
         }
