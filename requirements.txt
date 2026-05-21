@@ -1,0 +1,14 @@
+# Next K Protocol — Binance live-trading API service
+# =====================
+
+# Core
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+
+# Scheduler (embedded)
+apscheduler>=3.10.0
+pytz>=2023.3
+
+# Binance Futures REST
+httpx>=0.27.0
