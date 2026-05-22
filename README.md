@@ -444,4 +444,4 @@ next-k-api reads `accumulation.db` -> `zct_vwap_signals` table, filters:
 - `sl_price IS NOT NULL AND tp_price IS NOT NULL`
 - `side IN ('LONG', 'SHORT')`
 
-Converts matching rows to `SignalItem` list, POSTs to Next-k-protocol.
+Converts matching rows to `SignalItem` list, POSTs to Next-k-protocol. 
