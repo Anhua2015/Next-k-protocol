@@ -204,7 +204,7 @@ def insert_signal(
     entry_price: Optional[float],
     sl_price: Optional[float],
     tp_price: Optional[float],
-    confidence: Optional[float],
+    confidence: Optional[str],
     regime: Optional[str],
     notional_usdt: Optional[float],
     received_at: str,

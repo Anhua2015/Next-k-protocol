@@ -53,9 +53,9 @@ class SignalItem(BaseModel):
         ...,
         description="止盈价格（必填）",
     )
-    confidence: Optional[float] = Field(
+    confidence: Optional[str] = Field(
         None,
-        description="信号置信度，范围 0.0-1.0",
+        description="信号置信度标签，如 'high'、'medium'、'low'",
     )
     regime: Optional[str] = Field(
         None,

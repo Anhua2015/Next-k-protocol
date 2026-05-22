@@ -210,7 +210,7 @@ async def ingest_signals(body: SignalIngestRequest):
           "entry_price": 67250.5,
           "sl_price": 66500.0,
           "tp_price": 68500.0,
-          "confidence": 0.85,
+          "confidence": "high",
           "regime": "TREND_UP",
           "play": "PLAY01"
         }
@@ -221,7 +221,7 @@ async def ingest_signals(body: SignalIngestRequest):
     result: dict = {"scanned": 0, "traded": 0, "skipped": 0, "errors": 0, "details": []}
 
     if _db.get_config("enabled", "false").lower() != "true":
-        logger.debug("ingest: trading disabled")
+        logger.info("ingest: trading disabled, skipped=%d", len(body.signals))
         for sig in body.signals:
             result["scanned"] += 1
             result["skipped"] += 1
@@ -265,10 +265,17 @@ async def ingest_signals(body: SignalIngestRequest):
         detail: dict = {"api_signal_id": sig.api_signal_id, "symbol": symbol, "side": side, "play": play}
 
         if sig.source not in enabled_sources:
+            logger.info("ingest skip %s %s: source=%s not in enabled_sources", side, symbol, sig.source)
             detail["action"] = "skipped_source_disabled"
             result["skipped"] += 1
             result["details"].append(detail)
             continue
+
+        logger.info(
+            "ingest received: id=%s symbol=%s side=%s play=%s entry=%s sl=%s tp=%s",
+            sig.api_signal_id, symbol, side, play,
+            sig.entry_price, sig.sl_price, sig.tp_price,
+        )
 
         with _db._db_write_lock:
             signal_log_id = _db.insert_signal(
@@ -286,6 +293,7 @@ async def ingest_signals(body: SignalIngestRequest):
                 play=play,
             )
             if signal_log_id is None:
+                logger.info("ingest skip %s %s: duplicate (source=%s id=%s)", side, symbol, sig.source, sig.api_signal_id)
                 detail["action"] = "duplicate"
                 result["skipped"] += 1
                 result["details"].append(detail)
