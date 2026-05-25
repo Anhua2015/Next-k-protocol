@@ -26,6 +26,7 @@ from auth import require_auth
 from models import (
     ConfigUpdate,
     PnlSummaryOut,
+    PositionCloseRequest,
     PositionOut,
     SignalIngestRequest,
     SignalIngestResult,
@@ -317,14 +318,15 @@ async def ingest_signals(body: SignalIngestRequest):
                 result["details"].append(detail)
                 continue
 
-            open_count = _db.count_open_total()
-            if open_count >= max_pos:
-                _db.update_signal_status(signal_log_id, "skipped_max_positions", f"global max={max_pos} open={open_count}")
-                logger.info("ingest skip %s %s: global max_positions=%d reached", side, symbol, max_pos)
-                detail["action"] = "skipped_max_positions"
-                result["skipped"] += 1
-                result["details"].append(detail)
-                continue
+            if sig.source != "momentum":
+                open_count = _db.count_open_total()
+                if open_count >= max_pos:
+                    _db.update_signal_status(signal_log_id, "skipped_max_positions", f"global max={max_pos} open={open_count}")
+                    logger.info("ingest skip %s %s: global max_positions=%d reached", side, symbol, max_pos)
+                    detail["action"] = "skipped_max_positions"
+                    result["skipped"] += 1
+                    result["details"].append(detail)
+                    continue
 
         from trader import execute_trade
 
@@ -455,6 +457,92 @@ async def get_position(
     if pos is None:
         raise HTTPException(status_code=404, detail="position_not_found")
     return pos
+
+
+@router.post(
+    "/positions/close",
+    summary="平仓（动量 trail 调用）",
+    description="按 symbol+side 查找开仓并市价平仓。取消该 symbol 所有条件单后下 MARKET 平仓单。需要鉴权。",
+    dependencies=[Depends(require_auth)],
+)
+async def close_position(body: PositionCloseRequest):
+    """动量动态止盈触发时调用，按 symbol+side 平仓。
+
+    流程：
+    1. 查找 symbol+side 的开仓记录
+    2. 取消该 symbol 所有条件单（含 SL algoOrder）
+    3. 市价平仓
+    4. 更新持仓状态为 closed
+    """
+    from trader import cancel_all_orders, get_mark_price, place_order
+
+    pos = _db.get_open_position_for_symbol(body.symbol)
+    if pos is None or pos["side"] != body.side:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no open position for {body.symbol} side={body.side}",
+        )
+
+    symbol = pos["symbol"]
+    side = pos["side"]
+    qty = pos.get("quantity")
+    if not qty:
+        raise HTTPException(status_code=400, detail="position has no quantity")
+
+    try:
+        cancel_all_orders(symbol)
+    except Exception as exc:
+        logger.warning("close_position cancel_all_orders %s: %s", symbol, exc)
+
+    hedge = False
+    try:
+        from trader import _detect_hedge_mode
+        hedge = _detect_hedge_mode()
+    except Exception:
+        pass
+
+    close_side = "SELL" if side == "LONG" else "BUY"
+    position_side = side if hedge else None
+
+    close_price = None
+    try:
+        params: dict = {
+            "symbol": symbol,
+            "side": close_side,
+            "type": "MARKET",
+            "quantity": qty,
+            "reduceOnly": "true",
+        }
+        if position_side:
+            params["positionSide"] = position_side
+            params.pop("reduceOnly", None)
+        resp = place_order(params)
+        avg = resp.get("avgPrice")
+        if avg and float(avg) > 0:
+            close_price = float(avg)
+    except Exception as exc:
+        logger.error("close_position MARKET order failed %s: %s", symbol, exc)
+
+    if close_price is None:
+        try:
+            close_price = get_mark_price(symbol)
+        except Exception:
+            close_price = 0.0
+
+    from trader import _record_closed_position
+
+    _record_closed_position(pos, body.close_reason, close_price)
+    logger.info(
+        "close_position %s %s reason=%s close=%.6f",
+        side, symbol, body.close_reason, close_price,
+    )
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "side": side,
+        "close_reason": body.close_reason,
+        "close_price": close_price,
+    }
 
 
 # ---------------------------------------------------------------------------

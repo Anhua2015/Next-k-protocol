@@ -32,7 +32,7 @@ DEFAULT_CONFIG: Dict[str, str] = {
     "max_positions_play02": "5",
     "max_positions_play03": "5",
     "leverage": "10",
-    "enabled_sources": "zct_vwap",
+    "enabled_sources": "zct_vwap,momentum",
     "position_expire_hours": "4",
     "expire_hours_play01": "5",
     "expire_hours_play02": "4",
