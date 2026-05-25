@@ -231,7 +231,7 @@ async def ingest_signals(body: SignalIngestRequest):
 
     enabled_sources = [
         s.strip()
-        for s in _db.get_config("enabled_sources", "zct_vwap").split(",")
+        for s in _db.get_config("enabled_sources", "zct_vwap,momentum").split(",")
         if s.strip()
     ]
 
