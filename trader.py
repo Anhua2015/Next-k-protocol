@@ -410,8 +410,7 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     play = signal.get("play", "") or ""
     try:
         sl_price = float(signal["sl_price"])
-        _tp_raw = signal.get("tp_price")
-        tp_price = float(_tp_raw) if _tp_raw is not None else None
+        tp_price = float(signal["tp_price"])
         margin = float(get_config("margin_usdt", "100"))
         leverage = int(get_config("leverage", "10"))
     except (TypeError, ValueError) as exc:
@@ -452,7 +451,7 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
             raise ValueError(f"notional {qty * mark_px:.2f} < exchange min {min_notional}")
 
         sl_p = _round_price(sl_price, tick_size)
-        tp_p = _round_price(tp_price, tick_size) if tp_price is not None else None
+        tp_p = _round_price(tp_price, tick_size)
 
         order_side = "BUY" if side == "LONG" else "SELL"
         close_side = "SELL" if side == "LONG" else "BUY"
@@ -488,9 +487,8 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     try:
         sl_resp = _place_protective(symbol, close_side, sl_p, qty, position_side, tick_size, "SL")
         sl_order_id = str(sl_resp.get("algoId", "") or sl_resp.get("orderId", ""))
-        if tp_p is not None:
-            tp_resp = _place_protective(symbol, close_side, tp_p, qty, position_side, tick_size, "TP")
-            tp_order_id = str(tp_resp.get("algoId", "") or tp_resp.get("orderId", ""))
+        tp_resp = _place_protective(symbol, close_side, tp_p, qty, position_side, tick_size, "TP")
+        tp_order_id = str(tp_resp.get("algoId", "") or tp_resp.get("orderId", ""))
     except Exception as exc:
         logger.error("SL/TP placement failed %s %s: %s", side, symbol, exc)
         try:
@@ -518,7 +516,7 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
         play=play,
     )
     update_signal_status(signal_log_id, "traded")
-    logger.info("Opened %s %s qty=%s entry=%.6f sl=%.6f tp=%s", side, symbol, qty, actual_entry, sl_p, f"{tp_p:.6f}" if tp_p is not None else "none")
+    logger.info("Opened %s %s qty=%s entry=%.6f sl=%.6f tp=%.6f", side, symbol, qty, actual_entry, sl_p, tp_p)
     return True
 
 

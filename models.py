@@ -49,9 +49,9 @@ class SignalItem(BaseModel):
         ...,
         description="止损价格（必填）",
     )
-    tp_price: Optional[float] = Field(
-        None,
-        description="止盈价格（动量策略可不传，仅设止损）",
+    tp_price: float = Field(
+        ...,
+        description="止盈价格（必填）",
     )
     confidence: Optional[str] = Field(
         None,
@@ -93,19 +93,6 @@ class SignalIngestResult(BaseModel):
     details: List[Dict[str, Any]] = Field(
         default_factory=list,
         description="每条信号的处理详情",
-    )
-
-
-class PositionCloseRequest(BaseModel):
-    """平仓请求（由 next-k-api 动量 trail 任务调用）。"""
-
-    symbol: str = Field(..., description="交易对符号")
-    side: str = Field(
-        ..., description="持仓方向：LONG / SHORT", pattern="^(LONG|SHORT)$"
-    )
-    close_reason: str = Field(
-        "trail",
-        description="平仓原因：trail_tier1 / trail_tier2 / trail_low / trail_stop",
     )
 
 
