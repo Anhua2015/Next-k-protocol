@@ -392,6 +392,7 @@ async def ingest_signals(body: SignalIngestRequest):
                 "symbol": symbol,
                 "side": side,
                 "source": source,
+                "entry_price": float(sig.entry_price) if sig.entry_price is not None else None,
                 "sl_price": float(sig.sl_price) if sig.sl_price is not None else None,
                 "tp_price": float(sig.tp_price) if sig.tp_price is not None else None,
                 "notional_usdt": sig.notional_usdt,
@@ -542,8 +543,8 @@ async def list_positions(
       - 'unknown'：未知原因
     - **expire_at**：持仓过期时间（UTC），到期后由 scheduler 自动强平
     """
-    if status and status not in ("open", "closed"):
-        raise HTTPException(status_code=400, detail="status must be 'open' or 'closed'")
+    if status and status not in ("open", "closed", "pending_entry", "cancelled_pending"):
+        raise HTTPException(status_code=400, detail="status must be 'open' | 'closed' | 'pending_entry' | 'cancelled_pending'")
     rows = _db.list_positions(status=status, limit=limit, offset=offset)
     return rows
 

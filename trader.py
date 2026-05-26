@@ -24,12 +24,19 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from db import (
+    cancel_pending_position,
+    compute_expire_at,
+    compute_pending_deadline,
     get_config,
     get_open_expired_positions,
     get_open_position_for_symbol,
     get_open_positions,
+    get_pending_entries,
     get_source_config,
+    insert_pending_position,
     insert_position,
+    promote_pending_to_open,
+    resolve_expire_hours,
     set_config,
     update_position_closed,
     update_signal_status,
@@ -353,6 +360,26 @@ def cancel_algo_order(algo_id: str) -> bool:
         return False
 
 
+def cancel_order_by_id(symbol: str, order_id: str) -> bool:
+    """按 orderId 取消单个普通订单（LIMIT / STOP / 等）。
+
+    4xx 视作 already gone（已成交 / 已取消 / 不存在）返回 True；5xx / 网络错误返回 False。
+    """
+    try:
+        _request("DELETE", "/fapi/v1/order", {"symbol": symbol, "orderId": order_id})
+        return True
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code if exc.response is not None else 0
+        if 400 <= code < 500:
+            logger.info("cancel_order_by_id %s %s: already gone (%s)", symbol, order_id, code)
+            return True
+        logger.error("cancel_order_by_id %s %s: http %s", symbol, order_id, code)
+        return False
+    except Exception as exc:
+        logger.error("cancel_order_by_id %s %s: %s", symbol, order_id, exc)
+        return False
+
+
 def get_open_algo_orders(symbol: str) -> List[Any]:
     try:
         data = _request("GET", "/fapi/v1/openAlgoOrders", {"symbol": symbol})
@@ -496,6 +523,11 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
         update_signal_status(signal_log_id, "skipped_disabled", "trading disabled")
         return False
 
+    entry_type = get_source_config(
+        source, "entry_type",
+        get_config("entry_type", "MARKET"),
+    ).upper()
+
     qty: float = 0.0
     actual_entry: float = 0.0
     position_side: Optional[str] = None
@@ -512,6 +544,70 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
 
         mark_px = get_mark_price(symbol)
 
+        order_side = "BUY" if side == "LONG" else "SELL"
+        close_side = "SELL" if side == "LONG" else "BUY"
+
+        if entry_type == "LIMIT":
+            signal_entry = signal.get("entry_price")
+            if signal_entry is None or float(signal_entry) <= 0:
+                logger.error("LIMIT entry %s %s: signal missing entry_price", side, symbol)
+                update_signal_status(signal_log_id, "error", "limit needs entry_price")
+                return False
+            limit_price_raw = float(signal_entry)
+            limit_price = _round_price(limit_price_raw, tick_size)
+            raw_qty = margin * leverage / limit_price
+            qty = _round_quantity(raw_qty, step_size)
+            if qty <= 0:
+                raise ValueError(f"computed qty={qty} (margin={margin}, limit={limit_price})")
+            if qty * limit_price < min_notional:
+                raise ValueError(f"notional {qty * limit_price:.2f} < exchange min {min_notional}")
+
+            entry_params: Dict[str, Any] = {
+                "symbol": symbol,
+                "side": order_side,
+                "type": "LIMIT",
+                "timeInForce": "GTC",
+                "quantity": qty,
+                "price": limit_price,
+                "newOrderRespType": "ACK",
+            }
+            if position_side:
+                entry_params["positionSide"] = position_side
+            entry_resp = place_order(entry_params)
+            entry_order_id = str(entry_resp.get("orderId", ""))
+            if not entry_order_id:
+                raise ValueError(f"LIMIT response missing orderId: {entry_resp}")
+
+            timeout_sec = float(get_source_config(
+                source, "limit_entry_timeout_sec",
+                get_config("limit_entry_timeout_sec", "30"),
+            ))
+            deadline = compute_pending_deadline(timeout_sec)
+
+            insert_pending_position(
+                signal_log_id=signal_log_id,
+                symbol=symbol,
+                side=side,
+                entry_order_id=entry_order_id,
+                entry_price=limit_price,
+                sl_price=sl_price,
+                tp_price=tp_price,
+                quantity=qty,
+                notional_usdt=margin,
+                leverage=leverage,
+                opened_at=_now_utc(),
+                entry_deadline=deadline,
+                play=play,
+                source=source,
+            )
+            update_signal_status(signal_log_id, "pending_entry")
+            logger.info(
+                "LIMIT placed: %s %s qty=%s price=%.6f order=%s deadline=%s",
+                side, symbol, qty, limit_price, entry_order_id, deadline,
+            )
+            return True
+
+        # MARKET 分支（原行为）
         raw_qty = margin * leverage / mark_px
         qty = _round_quantity(raw_qty, step_size)
         if qty <= 0:
@@ -519,10 +615,7 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
         if qty * mark_px < min_notional:
             raise ValueError(f"notional {qty * mark_px:.2f} < exchange min {min_notional}")
 
-        order_side = "BUY" if side == "LONG" else "SELL"
-        close_side = "SELL" if side == "LONG" else "BUY"
-
-        entry_params: Dict[str, Any] = {
+        entry_params = {
             "symbol": symbol,
             "side": order_side,
             "type": "MARKET",
@@ -645,6 +738,21 @@ def close_position(
     if pos is None:
         logger.warning("close_position %s %s: no open position found", side, symbol)
         return False
+
+    # pending_entry：限价单还没成交，撤掉单子标记 cancelled_pending，不走 MARKET（没仓位可平）
+    if pos.get("status") == "pending_entry":
+        entry_oid = pos.get("entry_order_id")
+        logger.info(
+            "close_position %s %s: pending_entry, cancelling limit order=%s rule=%s",
+            side, symbol, entry_oid, exit_rule,
+        )
+        if entry_oid:
+            cancel_order_by_id(symbol, str(entry_oid))
+        cancel_pending_position(pos["id"], reason=exit_rule)
+        sl_id = pos.get("signal_log_id")
+        if sl_id:
+            update_signal_status(int(sl_id), "closed", "paper_close_pending")
+        return True
 
     # side 一致性校验
     if side.upper() != pos["side"].upper():
@@ -878,6 +986,192 @@ def sync_open_positions() -> None:
                 logger.warning("sync pos=%s: %s", pos["id"], exc)
         except Exception as exc:
             logger.warning("sync pos=%s: %s", pos["id"], exc)
+
+
+def reconcile_pending_entries() -> None:
+    """轮询 status='pending_entry' 的持仓，按 entry 限价单状态分发：
+
+    - FILLED          -> 用真实成交价/数量补 SL/TP，promote 到 open
+    - PARTIALLY_FILLED 未到 deadline -> 跳过
+    - PARTIALLY_FILLED 到 deadline   -> 用已成交部分 promote，剩余撤掉
+    - NEW             未到 deadline -> 跳过
+    - NEW             到 deadline   -> cancel + cancelled_pending(timeout)
+    - CANCELED/REJECTED/EXPIRED     -> cancelled_pending(rejected)
+    """
+    global _SYNC_AUTH_FAIL_COUNT
+    if not get_config("binance_api_key", ""):
+        return
+    if get_config("enabled", "false").lower() != "true":
+        return
+
+    pending = get_pending_entries()
+    if not pending:
+        return
+
+    for pos in pending:
+        try:
+            _reconcile_one_pending(pos)
+            _SYNC_AUTH_FAIL_COUNT = 0
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code if exc.response is not None else 0
+            if code in (401, 403):
+                _SYNC_AUTH_FAIL_COUNT += 1
+                if _SYNC_AUTH_FAIL_COUNT >= _SYNC_AUTH_FAIL_THRESHOLD:
+                    set_config("enabled", "false")
+                    logger.critical(
+                        "Binance auth failed %d times; DISABLED trading (rotate API key then re-enable)",
+                        _SYNC_AUTH_FAIL_COUNT,
+                    )
+                else:
+                    logger.warning("reconcile pos=%s auth-fail %d/%d",
+                                   pos["id"], _SYNC_AUTH_FAIL_COUNT, _SYNC_AUTH_FAIL_THRESHOLD)
+            else:
+                logger.warning("reconcile pos=%s: %s", pos["id"], exc)
+        except Exception as exc:
+            logger.warning("reconcile pos=%s: %s", pos["id"], exc)
+
+
+def _reconcile_one_pending(pos: Dict[str, Any]) -> None:
+    pos_id = pos["id"]
+    symbol = pos["symbol"]
+    side = pos["side"]
+    entry_order_id = pos.get("entry_order_id")
+    deadline = pos.get("entry_deadline")
+    signal_log_id = pos.get("signal_log_id")
+
+    if not entry_order_id:
+        logger.error("reconcile pos=%s %s: missing entry_order_id, marking error", pos_id, symbol)
+        cancel_pending_position(pos_id, reason="error_no_orderid")
+        if signal_log_id:
+            update_signal_status(int(signal_log_id), "error", "pending without entry_order_id")
+        return
+
+    now_iso = _now_utc()
+    past_deadline = bool(deadline and now_iso >= deadline)
+
+    info = get_order(symbol, str(entry_order_id))
+    status = (info.get("status") or "").upper()
+    executed_qty = float(info.get("executedQty") or 0)
+    avg_price = float(info.get("avgPrice") or 0)
+
+    if status == "FILLED":
+        _promote_pending(pos, fill_qty=executed_qty, fill_price=avg_price)
+        return
+
+    if status == "PARTIALLY_FILLED":
+        if not past_deadline:
+            logger.info("reconcile pos=%s %s: PARTIALLY_FILLED, waiting", pos_id, symbol)
+            return
+        if executed_qty > 0 and avg_price > 0:
+            cancel_order_by_id(symbol, str(entry_order_id))
+            _promote_pending(pos, fill_qty=executed_qty, fill_price=avg_price)
+            return
+        cancel_order_by_id(symbol, str(entry_order_id))
+        cancel_pending_position(pos_id, reason="timeout_no_fill")
+        if signal_log_id:
+            update_signal_status(int(signal_log_id), "cancelled_pending", "limit timeout (partial=0)")
+        logger.info("reconcile pos=%s %s: timeout no real fill", pos_id, symbol)
+        return
+
+    if status in ("CANCELED", "EXPIRED", "REJECTED"):
+        cancel_pending_position(pos_id, reason="rejected")
+        if signal_log_id:
+            update_signal_status(int(signal_log_id), "cancelled_pending", f"order {status}")
+        logger.info("reconcile pos=%s %s: order %s, marked cancelled_pending", pos_id, symbol, status)
+        return
+
+    # NEW / 其它
+    if not past_deadline:
+        logger.debug("reconcile pos=%s %s: status=%s, waiting", pos_id, symbol, status)
+        return
+
+    cancel_order_by_id(symbol, str(entry_order_id))
+    cancel_pending_position(pos_id, reason="timeout")
+    if signal_log_id:
+        update_signal_status(int(signal_log_id), "cancelled_pending", "limit timeout")
+    logger.info("reconcile pos=%s %s: timeout (status=%s), cancelled", pos_id, symbol, status)
+
+
+def _promote_pending(pos: Dict[str, Any], *, fill_qty: float, fill_price: float) -> None:
+    """entry 已成交（全部或部分到截止）：下 SL/TP，promote 到 open。"""
+    pos_id = pos["id"]
+    symbol = pos["symbol"]
+    side = pos["side"]
+    sl_price = pos.get("sl_price")
+    tp_price = pos.get("tp_price")
+    play = pos.get("play")
+    source = pos.get("source") or ""
+    signal_log_id = pos.get("signal_log_id")
+
+    if fill_qty <= 0 or fill_price <= 0:
+        logger.error("promote pos=%s %s: invalid fill qty=%s price=%s", pos_id, symbol, fill_qty, fill_price)
+        cancel_pending_position(pos_id, reason="invalid_fill")
+        if signal_log_id:
+            update_signal_status(int(signal_log_id), "error", "invalid fill in promote")
+        return
+
+    try:
+        _, tick_size, _ = _get_filters(symbol)
+    except Exception as exc:
+        logger.error("promote pos=%s %s: get filters failed: %s", pos_id, symbol, exc)
+        return
+
+    hedge = _detect_hedge_mode()
+    position_side = side if hedge else None
+    close_side = "SELL" if side == "LONG" else "BUY"
+
+    final_sl_p = _round_price(float(sl_price), tick_size) if sl_price is not None else None
+    final_tp_p = _round_price(float(tp_price), tick_size) if tp_price is not None else None
+
+    if final_sl_p is not None:
+        try:
+            mark_px = get_mark_price(symbol)
+            _validate_sl_distance(side, final_sl_p, mark_px, tick_size)
+        except ValueError as exc:
+            logger.warning("promote SL validation failed %s: %s", symbol, exc)
+        except Exception as exc:
+            logger.warning("promote mark_price fetch failed %s: %s", symbol, exc)
+
+    sl_order_id = ""
+    tp_order_id = ""
+    try:
+        if final_sl_p is not None:
+            sl_resp = _place_protective(symbol, close_side, final_sl_p, fill_qty, position_side, tick_size, "SL")
+            sl_order_id = str(sl_resp.get("algoId", "") or sl_resp.get("orderId", ""))
+            logger.info("promote SL placed: pos=%s %s sl=%.6f algoId=%s", pos_id, symbol, final_sl_p, sl_order_id)
+        if final_tp_p is not None:
+            tp_resp = _place_protective(symbol, close_side, final_tp_p, fill_qty, position_side, tick_size, "TP")
+            tp_order_id = str(tp_resp.get("algoId", "") or tp_resp.get("orderId", ""))
+            logger.info("promote TP placed: pos=%s %s tp=%.6f algoId=%s", pos_id, symbol, final_tp_p, tp_order_id)
+    except Exception as exc:
+        logger.error("promote SL/TP failed pos=%s %s: %s — emergency close", pos_id, symbol, exc)
+        try:
+            cancel_all_orders(symbol)
+        except Exception:
+            pass
+        _emergency_close(symbol, side, fill_qty, position_side)
+        cancel_pending_position(pos_id, reason="sltp_failed")
+        if signal_log_id:
+            update_signal_status(int(signal_log_id), "error", f"SL/TP failed in promote: {exc}")
+        return
+
+    expire_hours = resolve_expire_hours(play, source=source)
+    expire_at = compute_expire_at(expire_hours)
+
+    promote_pending_to_open(
+        pos_id,
+        entry_price=fill_price,
+        quantity=fill_qty,
+        sl_order_id=sl_order_id,
+        tp_order_id=tp_order_id,
+        expire_at=expire_at,
+    )
+    if signal_log_id:
+        update_signal_status(int(signal_log_id), "traded")
+    logger.info(
+        "promote pos=%s %s %s qty=%.6f entry=%.6f sl=%s tp=%s expire=%s",
+        pos_id, side, symbol, fill_qty, fill_price, final_sl_p, final_tp_p, expire_at,
+    )
 
 
 def expire_open_positions() -> None:

@@ -47,12 +47,17 @@ DEFAULT_CONFIG: Dict[str, str] = {
     "src_momentum_leverage": "10",
     "src_momentum_max_positions": "2",
     "src_momentum_expire_hours": "4",
+    "src_momentum_entry_type": "LIMIT",
     # 接针
     "src_jiezhen_enabled": "false",
     "src_jiezhen_margin_usdt": "100",
     "src_jiezhen_leverage": "10",
     "src_jiezhen_max_positions": "3",
     "src_jiezhen_expire_hours": "4",
+    # 入场单类型 (MARKET / LIMIT)；per-source 可用 src_{source}_entry_type 覆盖
+    "entry_type": "MARKET",
+    # LIMIT 单未成交超时秒数；per-source 可用 src_{source}_limit_entry_timeout_sec 覆盖
+    "limit_entry_timeout_sec": "30",
 }
 
 _ENV_TO_CONFIG: Dict[str, str] = {
@@ -80,6 +85,10 @@ _ENV_TO_CONFIG: Dict[str, str] = {
     "BINANCE_SRC_JIEZHEN_LEVERAGE": "src_jiezhen_leverage",
     "BINANCE_SRC_JIEZHEN_MAX_POSITIONS": "src_jiezhen_max_positions",
     "BINANCE_SRC_JIEZHEN_EXPIRE_HOURS": "src_jiezhen_expire_hours",
+    # 入场单类型 / 限价超时
+    "BINANCE_ENTRY_TYPE": "entry_type",
+    "BINANCE_LIMIT_ENTRY_TIMEOUT_SEC": "limit_entry_timeout_sec",
+    "BINANCE_SRC_MOMENTUM_ENTRY_TYPE": "src_momentum_entry_type",
 }
 
 DDL = """
@@ -132,7 +141,8 @@ CREATE TABLE IF NOT EXISTS positions (
     pnl_usdt        REAL,
     pnl_pct         REAL,
     play            TEXT,
-    source          TEXT
+    source          TEXT,
+    entry_deadline  TEXT
 );
 """
 
@@ -164,6 +174,12 @@ def init_db() -> None:
         try:
             conn.execute("ALTER TABLE positions ADD COLUMN source TEXT")
             logger.info("migrated: positions.source column added")
+        except Exception:
+            pass
+        # 存量 DB 迁移：positions 表加 entry_deadline 列（LIMIT 单挂单截止时间）
+        try:
+            conn.execute("ALTER TABLE positions ADD COLUMN entry_deadline TEXT")
+            logger.info("migrated: positions.entry_deadline column added")
         except Exception:
             pass
         for env_key, config_key in _ENV_TO_CONFIG.items():
@@ -311,12 +327,13 @@ def get_source_config(source: str, key_suffix: str, default: str = "") -> str:
 
 
 def count_open_by_source(source: str) -> int:
-    """按 source 字段统计当前持仓数。"""
+    """按 source 字段统计当前持仓数（含 pending_entry，避免限价挂单与已成交仓重复占名额）。"""
     if not source:
         return 0
     with get_db() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM positions WHERE status='open' AND source=?",
+            "SELECT COUNT(*) as cnt FROM positions "
+            "WHERE status IN ('open','pending_entry') AND source=?",
             (source,),
         ).fetchone()
     return row["cnt"] if row else 0
@@ -378,7 +395,8 @@ def count_open_by_play(play: Optional[str]) -> int:
         return 0
     with get_db() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM positions WHERE status='open' AND play LIKE ?",
+            "SELECT COUNT(*) as cnt FROM positions "
+            "WHERE status IN ('open','pending_entry') AND play LIKE ?",
             (prefix,),
         ).fetchone()
     return row["cnt"] if row else 0
@@ -387,7 +405,8 @@ def count_open_by_play(play: Optional[str]) -> int:
 def count_open_total() -> int:
     with get_db() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM positions WHERE status='open'"
+            "SELECT COUNT(*) as cnt FROM positions "
+            "WHERE status IN ('open','pending_entry')"
         ).fetchone()
     return row["cnt"] if row else 0
 
@@ -480,9 +499,11 @@ def get_open_expired_positions() -> List[Dict[str, Any]]:
 
 
 def get_open_position_for_symbol(symbol: str) -> Optional[Dict[str, Any]]:
+    """返回 open 或 pending_entry 状态下该 symbol 的持仓行（用于平仓 / 占名额校验）。"""
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM positions WHERE status='open' AND symbol=? LIMIT 1",
+            "SELECT * FROM positions "
+            "WHERE status IN ('open','pending_entry') AND symbol=? LIMIT 1",
             (symbol,),
         ).fetchone()
     return dict(row) if row else None
@@ -494,6 +515,116 @@ def get_position_by_id(position_id: int) -> Optional[Dict[str, Any]]:
             "SELECT * FROM positions WHERE id=?", (position_id,)
         ).fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Pending-entry helpers (LIMIT 单挂单中状态)
+# ---------------------------------------------------------------------------
+
+def insert_pending_position(
+    *,
+    signal_log_id: int,
+    symbol: str,
+    side: str,
+    entry_order_id: str,
+    sl_price: Optional[float],
+    tp_price: Optional[float],
+    quantity: Optional[float],
+    notional_usdt: Optional[float],
+    leverage: Optional[int],
+    opened_at: str,
+    entry_deadline: str,
+    play: Optional[str] = None,
+    source: str = "",
+    entry_price: Optional[float] = None,
+) -> int:
+    """写入 status='pending_entry' 行：限价单已下，等待成交。
+
+    sl_order_id / tp_order_id 留空，等 reconcile_pending_entries 在 entry 成交后补。
+    quantity 写计划数量；成交后 reconcile 用真实 executedQty 覆盖。
+    """
+    with get_db(write=True) as conn:
+        cur = conn.execute(
+            """INSERT INTO positions
+               (signal_log_id, symbol, side, entry_order_id, sl_order_id,
+                tp_order_id, entry_price, sl_price, tp_price, quantity,
+                notional_usdt, leverage, opened_at, expire_at, status,
+                play, source, entry_deadline)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,'pending_entry',?,?,?)""",
+            (
+                signal_log_id, symbol, side, entry_order_id, None,
+                None, entry_price, sl_price, tp_price, quantity,
+                notional_usdt, leverage, opened_at,
+                play, source, entry_deadline,
+            ),
+        )
+        return cur.lastrowid
+
+
+def get_pending_entries() -> List[Dict[str, Any]]:
+    """返回所有 pending_entry 仓位（reconcile_pending_entries 轮询用）。"""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM positions WHERE status='pending_entry' ORDER BY id ASC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def promote_pending_to_open(
+    position_id: int,
+    *,
+    entry_price: float,
+    quantity: float,
+    sl_order_id: Optional[str],
+    tp_order_id: Optional[str],
+    expire_at: str,
+) -> None:
+    """entry 成交后把 pending_entry 行升格为 open，并补真实成交价 / 数量 / SL-TP id / expire_at。"""
+    with get_db(write=True) as conn:
+        conn.execute(
+            """UPDATE positions
+               SET status='open',
+                   entry_price=?,
+                   quantity=?,
+                   sl_order_id=?,
+                   tp_order_id=?,
+                   expire_at=?,
+                   entry_deadline=NULL
+               WHERE id=? AND status='pending_entry'""",
+            (entry_price, quantity, sl_order_id, tp_order_id, expire_at, position_id),
+        )
+
+
+def cancel_pending_position(position_id: int, reason: str) -> None:
+    """限价单超时 / 被拒 / 平仓中断时，把 pending_entry 行置为 cancelled_pending（保留行供审计）。"""
+    closed_at = datetime.now(timezone.utc).isoformat()
+    with get_db(write=True) as conn:
+        conn.execute(
+            """UPDATE positions
+               SET status='cancelled_pending',
+                   close_reason=?,
+                   closed_at=?
+               WHERE id=? AND status='pending_entry'""",
+            (reason, closed_at, position_id),
+        )
+
+
+def compute_pending_deadline(timeout_sec: float) -> str:
+    """生成 pending_entry 的 entry_deadline ISO 字符串。"""
+    return (
+        datetime.now(timezone.utc) + timedelta(seconds=timeout_sec)
+    ).isoformat()
+
+
+def compute_expire_at(expire_hours: float) -> str:
+    """暴露给 trader.py 的 promote 流程使用，复用现有内部计算。"""
+    return _compute_expire_at(expire_hours)
+
+
+def resolve_expire_hours(play: Optional[str], source: str = "") -> float:
+    """暴露内部 _resolve_expire_hours 给 trader.py 用于 promote 时计算 expire_at。"""
+    return _resolve_expire_hours(play, source=source)
+
 
 
 def pnl_summary() -> Dict[str, Any]:
