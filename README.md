@@ -1,6 +1,6 @@
 # Next K Protocol
 
-币安合约实盘交易 API 服务。从 next-k-api 独立出来的微服务，通过 HTTP 接口接收 ZCT VWAP 信号并自动执行币安合约交易。
+币安合约实盘交易 API 服务。从 next-k-api 独立出来的微服务，通过 HTTP 接口接收 ZCT VWAP / 动量 / 接针三种策略的交易信号并自动执行币安合约交易。
 
 ## 1. 项目概述
 
@@ -127,10 +127,23 @@ All env vars can be set via `.env.oi` file or system environment variables.
 | `BINANCE_MAX_POSITIONS_PLAY01` | 5 | PLAY01 max positions |
 | `BINANCE_MAX_POSITIONS_PLAY02` | 5 | PLAY02 max positions |
 | `BINANCE_MAX_POSITIONS_PLAY03` | 5 | PLAY03 max positions |
-| `BINANCE_EXPIRE_HOURS` | 4 | Global position expiry (hours) |
 | `BINANCE_EXPIRE_HOURS_PLAY01` | 5 | PLAY01 expiry (hours) |
 | `BINANCE_EXPIRE_HOURS_PLAY02` | 4 | PLAY02 expiry (hours) |
 | `BINANCE_EXPIRE_HOURS_PLAY03` | 3 | PLAY03 expiry (hours) |
+| `BINANCE_SRC_MOMENTUM_ENABLED` | false | Momentum strategy switch |
+| `BINANCE_SRC_MOMENTUM_MARGIN_USDT` | 100 | Momentum margin per trade |
+| `BINANCE_SRC_MOMENTUM_LEVERAGE` | 10 | Momentum leverage |
+| `BINANCE_SRC_MOMENTUM_MAX_POSITIONS` | 2 | Momentum max positions |
+| `BINANCE_SRC_MOMENTUM_EXPIRE_HOURS` | 4 | Momentum expiry (hours) |
+| `BINANCE_SRC_MOMENTUM_HARD_SL_PCT` | 2.0 | Momentum hard stop-loss % |
+| `BINANCE_SRC_MOMENTUM_TP_PCT` | 4.0 | Momentum take-profit % |
+| `BINANCE_SRC_JIEZHEN_ENABLED` | false | Jiezhen strategy switch |
+| `BINANCE_SRC_JIEZHEN_MARGIN_USDT` | 100 | Jiezhen margin per trade |
+| `BINANCE_SRC_JIEZHEN_LEVERAGE` | 10 | Jiezhen leverage |
+| `BINANCE_SRC_JIEZHEN_MAX_POSITIONS` | 3 | Jiezhen max positions |
+| `BINANCE_SRC_JIEZHEN_EXPIRE_HOURS` | 4 | Jiezhen expiry (hours) |
+| `BINANCE_SRC_JIEZHEN_HARD_SL_PCT` | 2.0 | Jiezhen hard stop-loss % |
+| `BINANCE_SRC_JIEZHEN_TP_PCT` | 4.0 | Jiezhen take-profit % |
 | `DATA_DIR` | (current dir) | Data directory (binance.db location) |
 
 ## 5. API 接口文档
@@ -444,4 +457,4 @@ next-k-api reads `accumulation.db` -> `zct_vwap_signals` table, filters:
 - `sl_price IS NOT NULL AND tp_price IS NOT NULL`
 - `side IN ('LONG', 'SHORT')`
 
-Converts matching rows to `SignalItem` list, POSTs to Next-k-protocol.
+Converts matching rows to `SignalItem` list, POSTs to Next-k-protocol. 

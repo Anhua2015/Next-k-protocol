@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 import db as _db
 from auth import require_auth
 from models import (
+    ClosePositionRequest,
     ConfigUpdate,
     PnlSummaryOut,
     PositionOut,
@@ -32,6 +33,8 @@ from models import (
     SignalLogOut,
     StatusOut,
 )
+
+_VALID_SOURCES = ("zct_vwap", "momentum", "jiezhen")
 
 logger = logging.getLogger("router")
 
@@ -98,15 +101,23 @@ async def get_status():
     - **db_path**：SQLite 数据库文件路径。
     """
     cfg = _db.get_all_config()
-    open_pos = len(_db.get_open_positions())
+    open_positions_list = _db.get_open_positions()
+    strategy_positions: dict = {}
+    for src in _VALID_SOURCES:
+        strategy_positions[src] = _db.count_open_by_source(src)
+    logger.info(
+        "status: enabled=%s testnet=%s open=%d max=%s strategies=%s",
+        cfg.get("enabled", "false"), cfg.get("testnet", "false"),
+        len(open_positions_list), cfg.get("max_positions", "8"), strategy_positions,
+    )
     return StatusOut(
         enabled=cfg.get("enabled", "false"),
         testnet=cfg.get("testnet", "false"),
-        open_positions=open_pos,
+        open_positions=len(open_positions_list),
         max_positions=cfg.get("max_positions", "8"),
-        position_expire_hours=cfg.get("position_expire_hours", "4"),
         api_key_set=bool(cfg.get("binance_api_key", "").strip()),
         db_path=str(_db.DB_PATH),
+        strategy_positions=strategy_positions,
     )
 
 
@@ -186,15 +197,17 @@ async def update_config(body: ConfigUpdate):
     dependencies=[Depends(require_auth)],
 )
 async def ingest_signals(body: SignalIngestRequest):
-    """接收 ZCT 信号并自动判断是否开仓。
+    """接收交易信号并自动判断是否开仓。支持 ZCT VWAP / 动量 / 接针三种策略。
 
     处理流程（每条信号）：
-    1. **去重检查**：同一 source+api_signal_id 的信号不会重复处理
-    2. **交易开关**：enabled=false 时所有信号跳过
-    3. **信号源过滤**：信号 source 必须在 enabled_sources 列表中
-    4. **持仓冲突**：同一 symbol 已有开仓时跳过（一币一仓）
-    5. **仓位上限**：先检查策略（play）上限，再检查全局上限
-    6. **执行开仓**：调用币安 API 下 MARKET 市价单 → SL/TP 条件单
+    1. **来源验证**：source 必须在 zct_vwap/momentum/jiezhen 中
+    2. **策略开关**：对应 src_{source}_enabled 必须为 true
+    3. **去重检查**：同一 source+api_signal_id 的信号不会重复处理
+    4. **交易开关**：enabled=false 时所有信号跳过
+    5. **持仓冲突**：同一 symbol 已有开仓时跳过（一币一仓）
+    6. **仓位上限**：ZCT 按 play 检查，动量/接针按 source 检查，最后全局上限
+    7. **执行开仓**：调用币安 API 下 MARKET 市价单 → SL/TP 条件单
+       SL/TP 均由 next-k-api 在信号中计算好，Protocol 不做二次计算
 
     返回 SignalIngestResult，包含处理汇总和每条信号的详情。
 
@@ -213,6 +226,15 @@ async def ingest_signals(body: SignalIngestRequest):
           "confidence": "high",
           "regime": "TREND_UP",
           "play": "PLAY01"
+        },
+        {
+          "source": "momentum",
+          "api_signal_id": "67890",
+          "symbol": "ETHUSDT",
+          "side": "SHORT",
+          "entry_price": 3200.0,
+          "sl_price": 3264.0,
+          "tp_price": 3072.0
         }
       ]
     }
@@ -225,14 +247,8 @@ async def ingest_signals(body: SignalIngestRequest):
         for sig in body.signals:
             result["scanned"] += 1
             result["skipped"] += 1
-            result["details"].append({"api_signal_id": sig.api_signal_id, "symbol": sig.symbol, "action": "skipped_disabled"})
+            result["details"].append({"api_signal_id": sig.api_signal_id, "symbol": sig.symbol, "source": sig.source, "action": "skipped_disabled"})
         return SignalIngestResult(**result)
-
-    enabled_sources = [
-        s.strip()
-        for s in _db.get_config("enabled_sources", "zct_vwap").split(",")
-        if s.strip()
-    ]
 
     try:
         max_pos = int(_db.get_config("max_positions", "8"))
@@ -255,31 +271,36 @@ async def ingest_signals(body: SignalIngestRequest):
                 return _play_max.get(_k.lower(), 5)
         return max_pos
 
+    def _source_max_positions(source: str) -> int:
+        try:
+            return int(_db.get_source_config(source, "max_positions", "5"))
+        except ValueError:
+            return 5
+
     result["scanned"] = len(body.signals)
 
     for sig in body.signals:
         symbol = sig.symbol
         side = sig.side
+        source = sig.source
         play = sig.play or ""
 
-        detail: dict = {"api_signal_id": sig.api_signal_id, "symbol": symbol, "side": side, "play": play}
-
-        if sig.source not in enabled_sources:
-            logger.info("ingest skip %s %s: source=%s not in enabled_sources", side, symbol, sig.source)
-            detail["action"] = "skipped_source_disabled"
-            result["skipped"] += 1
-            result["details"].append(detail)
-            continue
+        detail: dict = {
+            "api_signal_id": sig.api_signal_id, "symbol": symbol,
+            "side": side, "source": source,
+        }
 
         logger.info(
-            "ingest received: id=%s symbol=%s side=%s play=%s entry=%s sl=%s tp=%s",
-            sig.api_signal_id, symbol, side, play,
+            "ingest signal: source=%s id=%s symbol=%s side=%s play=%s entry=%s sl=%s tp=%s confidence=%s regime=%s notional=%s",
+            source, sig.api_signal_id, symbol, side, play,
             sig.entry_price, sig.sl_price, sig.tp_price,
+            sig.confidence, sig.regime, sig.notional_usdt,
         )
 
         with _db._db_write_lock:
+            # 先入库（所有信号均记录到 signals_log）
             signal_log_id = _db.insert_signal(
-                source=sig.source,
+                source=source,
                 api_signal_id=sig.api_signal_id,
                 symbol=symbol,
                 side=side,
@@ -293,12 +314,33 @@ async def ingest_signals(body: SignalIngestRequest):
                 play=play,
             )
             if signal_log_id is None:
-                logger.info("ingest skip %s %s: duplicate (source=%s id=%s)", side, symbol, sig.source, sig.api_signal_id)
+                logger.info("ingest skip %s %s: duplicate (source=%s id=%s)", side, symbol, source, sig.api_signal_id)
                 detail["action"] = "duplicate"
                 result["skipped"] += 1
                 result["details"].append(detail)
                 continue
 
+            # 信号来源验证
+            if source not in _VALID_SOURCES:
+                skip_reason = f"invalid source={source}"
+                _db.update_signal_status(signal_log_id, "skipped_invalid_source", skip_reason)
+                logger.warning("ingest skip %s %s: %s", side, symbol, skip_reason)
+                detail["action"] = "skipped_invalid_source"
+                result["skipped"] += 1
+                result["details"].append(detail)
+                continue
+
+            # 策略开关检查
+            if not _db.source_enabled(source):
+                skip_reason = f"source={source} disabled"
+                _db.update_signal_status(signal_log_id, "skipped_source_disabled", skip_reason)
+                logger.info("ingest skip %s %s: %s", side, symbol, skip_reason)
+                detail["action"] = "skipped_source_disabled"
+                result["skipped"] += 1
+                result["details"].append(detail)
+                continue
+
+            # 同币种持仓冲突
             if _db.get_open_position_for_symbol(symbol) is not None:
                 _db.update_signal_status(signal_log_id, "skipped_position_exists", "open position for symbol")
                 logger.info("ingest skip %s %s: position already open", side, symbol)
@@ -307,20 +349,36 @@ async def ingest_signals(body: SignalIngestRequest):
                 result["details"].append(detail)
                 continue
 
-            play_max = _play_max_for(play)
-            play_open = _db.count_open_by_play(play)
-            if play_open >= play_max:
-                _db.update_signal_status(signal_log_id, "skipped_max_positions", f"play={play} max={play_max} open={play_open}")
-                logger.info("ingest skip %s %s: play=%s max=%d reached", side, symbol, play, play_max)
-                detail["action"] = "skipped_max_positions"
-                result["skipped"] += 1
-                result["details"].append(detail)
-                continue
+            # 策略仓位上限检查
+            if source == "zct_vwap":
+                play_max = _play_max_for(play)
+                play_open = _db.count_open_by_play(play)
+                if play_open >= play_max:
+                    skip_reason = f"play={play} max={play_max} open={play_open}"
+                    _db.update_signal_status(signal_log_id, "skipped_max_positions", skip_reason)
+                    logger.info("ingest skip %s %s: %s", side, symbol, skip_reason)
+                    detail["action"] = "skipped_max_positions"
+                    result["skipped"] += 1
+                    result["details"].append(detail)
+                    continue
+            else:
+                src_max = _source_max_positions(source)
+                src_open = _db.count_open_by_source(source)
+                if src_open >= src_max:
+                    skip_reason = f"source={source} max={src_max} open={src_open}"
+                    _db.update_signal_status(signal_log_id, "skipped_max_positions", skip_reason)
+                    logger.info("ingest skip %s %s: %s", side, symbol, skip_reason)
+                    detail["action"] = "skipped_max_positions"
+                    result["skipped"] += 1
+                    result["details"].append(detail)
+                    continue
 
+            # 全局仓位上限
             open_count = _db.count_open_total()
             if open_count >= max_pos:
-                _db.update_signal_status(signal_log_id, "skipped_max_positions", f"global max={max_pos} open={open_count}")
-                logger.info("ingest skip %s %s: global max_positions=%d reached", side, symbol, max_pos)
+                skip_reason = f"global max={max_pos} open={open_count}"
+                _db.update_signal_status(signal_log_id, "skipped_max_positions", skip_reason)
+                logger.info("ingest skip %s %s: %s", side, symbol, skip_reason)
                 detail["action"] = "skipped_max_positions"
                 result["skipped"] += 1
                 result["details"].append(detail)
@@ -333,8 +391,9 @@ async def ingest_signals(body: SignalIngestRequest):
                 "signal_log_id": signal_log_id,
                 "symbol": symbol,
                 "side": side,
-                "sl_price": float(sig.sl_price),
-                "tp_price": float(sig.tp_price),
+                "source": source,
+                "sl_price": float(sig.sl_price) if sig.sl_price is not None else None,
+                "tp_price": float(sig.tp_price) if sig.tp_price is not None else None,
                 "notional_usdt": sig.notional_usdt,
                 "play": play,
             })
@@ -397,6 +456,59 @@ async def list_signals(
 # ---------------------------------------------------------------------------
 # Positions
 # ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/positions/close",
+    summary="平仓（由 next-k-api trail 退出触发）",
+    description="取消 SL/TP 条件单，MARKET 平仓，记录 PnL。由 next-k-api 纸面 trail 检查触发退出后调用。需要鉴权。",
+    dependencies=[Depends(require_auth)],
+)
+async def close_position(body: ClosePositionRequest):
+    """接收平仓指令并执行。
+
+    处理流程：
+    1. 根据 symbol 找到 open 持仓
+    2. 取消该 symbol 的所有条件单（SL/TP）
+    3. MARKET 平仓
+    4. 计算并记录 PnL
+
+    请求示例：
+    ```json
+    {
+      "source": "momentum",
+      "api_signal_id": "67890",
+      "symbol": "ETHUSDT",
+      "side": "SHORT",
+      "exit_rule": "trail_tier1",
+      "close_price": 3150.0
+    }
+    ```
+    """
+    from trader import close_position as do_close
+
+    logger.info(
+        "close_position request: source=%s symbol=%s side=%s exit_rule=%s close_price=%s signal_id=%s",
+        body.source, body.symbol, body.side, body.exit_rule, body.close_price, body.api_signal_id,
+    )
+
+    try:
+        ok = do_close(
+            source=body.source,
+            symbol=body.symbol,
+            side=body.side,
+            exit_rule=body.exit_rule,
+            close_price=body.close_price,
+        )
+        if ok:
+            return {"ok": True, "symbol": body.symbol, "action": "closed"}
+        else:
+            raise HTTPException(status_code=404, detail="no open position for symbol")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("close_position failed %s %s: %s", body.side, body.symbol, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get(

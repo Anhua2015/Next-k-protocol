@@ -26,7 +26,9 @@ import httpx
 from db import (
     get_config,
     get_open_expired_positions,
+    get_open_position_for_symbol,
     get_open_positions,
+    get_source_config,
     insert_position,
     set_config,
     update_position_closed,
@@ -407,15 +409,39 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     signal_log_id = signal["signal_log_id"]
     symbol = signal["symbol"]
     side = signal["side"]
+    source = signal.get("source", "") or ""
     play = signal.get("play", "") or ""
+
+    logger.info(
+        "execute_trade: source=%s symbol=%s side=%s play=%s signal_log_id=%s",
+        source, symbol, side, play, signal_log_id,
+    )
+
+    # 读策略保证金/杠杆，动量/接针用各自的，ZCT 用全局
+    if source in ("momentum", "jiezhen"):
+        margin = float(get_source_config(source, "margin_usdt", "100"))
+        leverage = int(get_source_config(source, "leverage", "10"))
+    else:
+        try:
+            margin = float(get_config("margin_usdt", "100"))
+            leverage = int(get_config("leverage", "10"))
+        except (TypeError, ValueError) as exc:
+            logger.error("config parse failed %s: %s", symbol, exc)
+            update_signal_status(signal_log_id, "error", f"bad config: {exc}")
+            return False
+
+    logger.info(
+        "execute_trade %s: source=%s margin=%.0f leverage=%d",
+        symbol, source, margin, leverage,
+    )
+
+    # SL/TP 统一从信号读取，不由 Protocol 计算
     try:
-        sl_price = float(signal["sl_price"])
-        tp_price = float(signal["tp_price"])
-        margin = float(get_config("margin_usdt", "100"))
-        leverage = int(get_config("leverage", "10"))
+        sl_price = float(signal["sl_price"]) if signal.get("sl_price") is not None else None
+        tp_price = float(signal["tp_price"]) if signal.get("tp_price") is not None else None
     except (TypeError, ValueError) as exc:
-        logger.error("config/signal parse failed %s: %s", symbol, exc)
-        update_signal_status(signal_log_id, "error", f"bad config: {exc}")
+        logger.error("signal SL/TP parse failed %s: %s", symbol, exc)
+        update_signal_status(signal_log_id, "error", f"bad signal SL/TP: {exc}")
         return False
 
     if margin <= 0 or leverage <= 0:
@@ -441,7 +467,6 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
             position_side = "LONG" if side == "LONG" else "SHORT"
 
         mark_px = get_mark_price(symbol)
-        _validate_sl_distance(side, sl_price, mark_px, tick_size)
 
         raw_qty = margin * leverage / mark_px
         qty = _round_quantity(raw_qty, step_size)
@@ -449,9 +474,6 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
             raise ValueError(f"computed qty={qty} (margin={margin}, mark={mark_px})")
         if qty * mark_px < min_notional:
             raise ValueError(f"notional {qty * mark_px:.2f} < exchange min {min_notional}")
-
-        sl_p = _round_price(sl_price, tick_size)
-        tp_p = _round_price(tp_price, tick_size)
 
         order_side = "BUY" if side == "LONG" else "SELL"
         close_side = "SELL" if side == "LONG" else "BUY"
@@ -477,18 +499,53 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
         if actual_entry <= 0:
             actual_entry = mark_px
             logger.warning("entry avgPrice missing for %s order=%s; using mark=%.6f", symbol, entry_order_id, mark_px)
+
+        logger.info(
+            "entry filled: %s %s qty=%s entry=%.6f order=%s",
+            side, symbol, qty, actual_entry, entry_order_id,
+        )
     except Exception as exc:
         logger.error("entry %s %s failed: %s", side, symbol, exc)
         update_signal_status(signal_log_id, "error", f"entry: {exc}")
         return False
 
+    # 统一使用信号 SL/TP（所有策略均由 next-k-api 计算）
+    final_sl_p: Optional[float] = None
+    final_tp_p: Optional[float] = None
+
+    if sl_price is not None:
+        final_sl_p = _round_price(sl_price, tick_size)
+    if tp_price is not None:
+        final_tp_p = _round_price(tp_price, tick_size)
+
+    logger.info(
+        "signal SL/TP: %s %s source=%s entry=%.6f sl=%s tp=%s",
+        side, symbol, source, actual_entry, final_sl_p, final_tp_p,
+    )
+
+    # 验证 SL 距离
+    if final_sl_p is not None:
+        try:
+            _validate_sl_distance(side, final_sl_p, mark_px, tick_size)
+        except ValueError as exc:
+            logger.warning("SL validation failed %s: %s", symbol, exc)
+
     sl_order_id = ""
     tp_order_id = ""
     try:
-        sl_resp = _place_protective(symbol, close_side, sl_p, qty, position_side, tick_size, "SL")
-        sl_order_id = str(sl_resp.get("algoId", "") or sl_resp.get("orderId", ""))
-        tp_resp = _place_protective(symbol, close_side, tp_p, qty, position_side, tick_size, "TP")
-        tp_order_id = str(tp_resp.get("algoId", "") or tp_resp.get("orderId", ""))
+        if final_sl_p is not None:
+            sl_resp = _place_protective(symbol, close_side, final_sl_p, qty, position_side, tick_size, "SL")
+            sl_order_id = str(sl_resp.get("algoId", "") or sl_resp.get("orderId", ""))
+            logger.info("SL placed: %s %s sl=%.6f algoId=%s", side, symbol, final_sl_p, sl_order_id)
+        else:
+            logger.info("SL skipped: %s %s (no SL price)", side, symbol)
+
+        if final_tp_p is not None:
+            tp_resp = _place_protective(symbol, close_side, final_tp_p, qty, position_side, tick_size, "TP")
+            tp_order_id = str(tp_resp.get("algoId", "") or tp_resp.get("orderId", ""))
+            logger.info("TP placed: %s %s tp=%.6f algoId=%s", side, symbol, final_tp_p, tp_order_id)
+        else:
+            logger.info("TP skipped: %s %s (no TP price)", side, symbol)
     except Exception as exc:
         logger.error("SL/TP placement failed %s %s: %s", side, symbol, exc)
         try:
@@ -507,16 +564,105 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
         sl_order_id=sl_order_id,
         tp_order_id=tp_order_id,
         entry_price=actual_entry,
-        sl_price=sl_p,
-        tp_price=tp_p,
+        sl_price=final_sl_p,
+        tp_price=final_tp_p,
         quantity=qty,
         notional_usdt=margin,
         leverage=leverage,
         opened_at=_now_utc(),
         play=play,
+        source=source,
     )
     update_signal_status(signal_log_id, "traded")
-    logger.info("Opened %s %s qty=%s entry=%.6f sl=%.6f tp=%.6f", side, symbol, qty, actual_entry, sl_p, tp_p)
+    logger.info(
+        "Opened %s %s source=%s qty=%s entry=%.6f sl=%.6f tp=%.6f margin=%.0f lev=%d",
+        side, symbol, source, qty, actual_entry, final_sl_p, final_tp_p, margin, leverage,
+    )
+    return True
+
+
+def close_position(
+    source: str,
+    symbol: str,
+    side: str,
+    exit_rule: str,
+    close_price: Optional[float] = None,
+) -> bool:
+    """平仓：取消 SL/TP 条件单 + MARKET 平仓 + 记录 PnL。
+
+    由 next-k-api trail 退出后通过 POST /api/binance/positions/close 调用。
+    """
+    logger.info(
+        "close_position: source=%s symbol=%s side=%s exit_rule=%s close_price=%s",
+        source, symbol, side, exit_rule, close_price,
+    )
+
+    pos = get_open_position_for_symbol(symbol)
+    if pos is None:
+        logger.warning("close_position %s %s: no open position found", side, symbol)
+        return False
+
+    # side 一致性校验
+    if side.upper() != pos["side"].upper():
+        logger.warning(
+            "close_position side mismatch: req=%s db=%s, using db side",
+            side, pos["side"],
+        )
+
+    qty = pos.get("quantity")
+    if not qty:
+        logger.warning("close_position pos=%s has no quantity", pos["id"])
+        return False
+
+    hedge = _detect_hedge_mode()
+    position_side = (pos["side"] if hedge else None)
+    close_side = "SELL" if pos["side"] == "LONG" else "BUY"
+
+    # MARKET 平仓（先平仓，成功后再清理 SL/TP，避免裸仓）
+    actual_close: Optional[float] = None
+    market_ok = False
+    try:
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": close_side,
+            "type": "MARKET",
+            "quantity": qty,
+            "reduceOnly": "true",
+        }
+        if position_side:
+            params["positionSide"] = position_side
+            params.pop("reduceOnly", None)
+        resp = place_order(params)
+        avg = resp.get("avgPrice")
+        if avg and float(avg) > 0:
+            actual_close = float(avg)
+            market_ok = True
+        logger.info(
+            "close_position %s %s: MARKET filled qty=%s price=%s",
+            side, symbol, qty, actual_close,
+        )
+    except Exception as exc:
+        logger.error("close_position MARKET failed %s %s: %s", side, symbol, exc)
+
+    if not market_ok:
+        logger.critical(
+            "close_position ABORTED %s %s: MARKET order failed, SL/TP retained",
+            side, symbol,
+        )
+        return False
+
+    # 平仓成功，清理 SL/TP 条件单
+    try:
+        cancel_all_orders(symbol)
+        logger.info("close_position %s %s: orders cancelled", side, symbol)
+    except Exception as exc:
+        logger.warning("close_position cancel_all_orders %s: %s", symbol, exc)
+
+    _record_closed_position(pos, exit_rule, actual_close)
+    logger.info(
+        "close_position done: %s %s source=%s rule=%s close=%.6f",
+        side, symbol, source, exit_rule, actual_close or 0,
+    )
     return True
 
 
@@ -594,6 +740,58 @@ def sync_open_positions() -> None:
 
             if close_reason == "unknown" and saw_pending_algo:
                 close_reason = "manual"
+
+            # 动量/接针只有 SL 单(无 TP)，若 SL 被 paper close 提前取消，
+            # sync 无法溯源，推断为 paper_close
+            if close_reason == "unknown" and not pos.get("tp_order_id"):
+                if pos.get("sl_order_id"):
+                    try:
+                        sl_info = get_algo_order(pos["sl_order_id"])
+                        sl_status = (sl_info.get("algoStatus") or "").upper()
+                        if sl_status in ("CANCELLED", "EXPIRED", "CANCELED"):
+                            close_reason = "paper_close"
+                            logger.info(
+                                "sync pos=%s %s: SL cancelled, infer paper_close",
+                                pos["id"], pos.get("symbol"),
+                            )
+                    except Exception:
+                        close_reason = "paper_close"
+                        logger.info(
+                            "sync pos=%s %s: SL not found, infer paper_close",
+                            pos["id"], pos.get("symbol"),
+                        )
+                else:
+                    close_reason = "paper_close"
+                    logger.info(
+                        "sync pos=%s %s: no SL/TP, infer paper_close",
+                        pos["id"], pos.get("symbol"),
+                    )
+
+            # ZCT VWAP(或任何同时有 TP+SL 的仓位): 两张条件单都处于
+            # CANCELLED/EXPIRED 等终态但均未触发, 仓位在币安已消失,
+            # 推断为外部平仓(交易所强制平仓/系统取消等)
+            if close_reason == "unknown":
+                all_cancelled = True
+                for oid in (pos.get("tp_order_id"), pos.get("sl_order_id")):
+                    if not oid:
+                        all_cancelled = False
+                        break
+                    try:
+                        info = get_algo_order(oid)
+                        st = (info.get("algoStatus") or "").upper()
+                        if st not in ("CANCELLED", "EXPIRED", "CANCELED"):
+                            all_cancelled = False
+                            break
+                    except Exception:
+                        pass
+                if all_cancelled:
+                    close_reason = "paper_close"
+                else:
+                    close_reason = "external"
+                logger.info(
+                    "sync pos=%s %s: fallback close_reason=%s (all_cancelled=%s)",
+                    pos["id"], pos.get("symbol"), close_reason, all_cancelled,
+                )
 
             if close_price is None:
                 try:
@@ -709,7 +907,7 @@ def _record_closed_position(
         ret = close_price / entry - 1.0
     else:
         pnl = qty * (entry - close_price)
-        ret = (entry / close_price - 1.0) if close_price > 0 else 0.0
+        ret = (entry - close_price) / entry if entry > 0 else 0.0
 
     pnl_pct = ret * lev * 100.0
     update_position_closed(
@@ -720,6 +918,10 @@ def _record_closed_position(
         pnl_usdt=round(pnl, 4),
         pnl_pct=round(pnl_pct, 4),
     )
+    # 同步更新 signals_log
+    signal_log_id = pos.get("signal_log_id")
+    if signal_log_id:
+        update_signal_status(signal_log_id, "closed", close_reason)
     logger.info(
         "Closed %s %s reason=%s close=%.6f pnl=%.4f pct=%.2f%%",
         side, pos.get("symbol"), close_reason, close_price, pnl, pnl_pct,

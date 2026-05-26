@@ -49,9 +49,9 @@ class SignalItem(BaseModel):
         ...,
         description="止损价格（必填）",
     )
-    tp_price: float = Field(
-        ...,
-        description="止盈价格（必填）",
+    tp_price: Optional[float] = Field(
+        None,
+        description="止盈价格，由 next-k-api 计算后推送。Protocol 不做二次计算",
     )
     confidence: Optional[str] = Field(
         None,
@@ -67,8 +67,7 @@ class SignalItem(BaseModel):
     )
     play: Optional[str] = Field(
         None,
-        description="策略类型标记，如 'PLAY01'、'PLAY02'、'PLAY03'。"
-        "用于区分不同策略的持仓上限和过期时限",
+        description="策略子类型标记。ZCT VWAP: PLAY01/PLAY02/PLAY03；动量/接针: 可空",
     )
 
 
@@ -96,6 +95,36 @@ class SignalIngestResult(BaseModel):
     )
 
 
+class ClosePositionRequest(BaseModel):
+    """平仓请求，由 next-k-api 在 trail 触发退出后推送。"""
+
+    source: str = Field(
+        ...,
+        description="信号来源：momentum / jiezhen",
+    )
+    api_signal_id: str = Field(
+        ...,
+        description="原始纸面信号 ID，用于关联 signals_log",
+    )
+    symbol: str = Field(
+        ...,
+        description="交易对符号",
+    )
+    side: str = Field(
+        ...,
+        description="持仓方向：LONG / SHORT",
+        pattern="^(LONG|SHORT)$",
+    )
+    exit_rule: str = Field(
+        ...,
+        description="退出原因：trail_stop / trail_low / trail_tier1 / trail_tier2 / expired",
+    )
+    close_price: Optional[float] = Field(
+        None,
+        description="建议平仓价（纸面记录的退出价），实盘按 MARKET 成交",
+    )
+
+
 class PositionOut(BaseModel):
     """持仓记录（API 返回）。"""
 
@@ -117,7 +146,7 @@ class PositionOut(BaseModel):
     status: str = Field(..., description="持仓状态：'open'（持仓中）| 'closed'（已平仓）")
     close_reason: Optional[str] = Field(
         None,
-        description="平仓原因：'tp'(止盈) | 'sl'(止损) | 'expired'(到期) | 'manual'(手动) | 'unknown'(未知)",
+        description="平仓原因：'tp'(止盈) | 'sl'(止损) | 'expired'(到期) | 'manual'(手动) | 'paper_close'(纸面平仓) | 'external'(外部平仓) | 'unknown'(未知)",
     )
     close_price: Optional[float] = Field(None, description="平仓成交均价（USDT）")
     closed_at: Optional[str] = Field(None, description="平仓时间（UTC ISO8601）")
@@ -172,9 +201,12 @@ class StatusOut(BaseModel):
     testnet: str = Field(..., description="是否使用测试网：'true' | 'false'")
     open_positions: int = Field(..., description="当前持仓数")
     max_positions: str = Field(..., description="全局最大持仓数")
-    position_expire_hours: str = Field(..., description="全局持仓过期时限（小时）")
     api_key_set: bool = Field(..., description="币安 API Key 是否已配置")
     db_path: str = Field(..., description="SQLite 数据库文件路径")
+    strategy_positions: dict = Field(
+        default_factory=dict,
+        description="各策略持仓数，如 {'zct_vwap':3, 'momentum':1, 'jiezhen':2}",
+    )
 
 
 class HealthOut(BaseModel):
