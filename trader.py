@@ -799,6 +799,12 @@ def sync_open_positions() -> None:
                 except Exception:
                     close_price = None
 
+            # 清理币安上残留的条件单(SL/TP)
+            try:
+                cancel_all_orders(pos["symbol"])
+            except Exception as exc:
+                logger.warning("sync cancel_all_orders %s: %s", pos["symbol"], exc)
+
             _record_closed_position(pos, close_reason, close_price)
             _SYNC_AUTH_FAIL_COUNT = 0
 
