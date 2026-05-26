@@ -8,6 +8,7 @@ close_reason 取值：'tp' | 'sl' | 'expired' | 'manual' | 'unknown'
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
@@ -16,27 +17,42 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
+logger = logging.getLogger(__name__)
+
 _DATA_DIR = Path(os.getenv("DATA_DIR", Path(__file__).parent))
 DB_PATH = _DATA_DIR / "binance.db"
 
 _db_write_lock = threading.RLock()
 
 DEFAULT_CONFIG: Dict[str, str] = {
+    # 全局
     "binance_api_key": "",
     "binance_api_secret": "",
     "testnet": "false",
     "enabled": "false",
-    "margin_usdt": "100",
     "max_positions": "8",
+    # ZCT VWAP（保留 play 体系）
+    "margin_usdt": "100",
+    "leverage": "10",
+    "src_zct_vwap_enabled": "false",
     "max_positions_play01": "5",
     "max_positions_play02": "5",
     "max_positions_play03": "5",
-    "leverage": "10",
-    "enabled_sources": "zct_vwap",
-    "position_expire_hours": "4",
     "expire_hours_play01": "5",
     "expire_hours_play02": "4",
     "expire_hours_play03": "3",
+    # 动量
+    "src_momentum_enabled": "false",
+    "src_momentum_margin_usdt": "100",
+    "src_momentum_leverage": "10",
+    "src_momentum_max_positions": "2",
+    "src_momentum_expire_hours": "4",
+    # 接针
+    "src_jiezhen_enabled": "false",
+    "src_jiezhen_margin_usdt": "100",
+    "src_jiezhen_leverage": "10",
+    "src_jiezhen_max_positions": "3",
+    "src_jiezhen_expire_hours": "4",
 }
 
 _ENV_TO_CONFIG: Dict[str, str] = {
@@ -49,10 +65,21 @@ _ENV_TO_CONFIG: Dict[str, str] = {
     "BINANCE_MAX_POSITIONS_PLAY01": "max_positions_play01",
     "BINANCE_MAX_POSITIONS_PLAY02": "max_positions_play02",
     "BINANCE_MAX_POSITIONS_PLAY03": "max_positions_play03",
-    "BINANCE_EXPIRE_HOURS": "position_expire_hours",
     "BINANCE_EXPIRE_HOURS_PLAY01": "expire_hours_play01",
     "BINANCE_EXPIRE_HOURS_PLAY02": "expire_hours_play02",
     "BINANCE_EXPIRE_HOURS_PLAY03": "expire_hours_play03",
+    # 动量
+    "BINANCE_SRC_MOMENTUM_ENABLED": "src_momentum_enabled",
+    "BINANCE_SRC_MOMENTUM_MARGIN_USDT": "src_momentum_margin_usdt",
+    "BINANCE_SRC_MOMENTUM_LEVERAGE": "src_momentum_leverage",
+    "BINANCE_SRC_MOMENTUM_MAX_POSITIONS": "src_momentum_max_positions",
+    "BINANCE_SRC_MOMENTUM_EXPIRE_HOURS": "src_momentum_expire_hours",
+    # 接针
+    "BINANCE_SRC_JIEZHEN_ENABLED": "src_jiezhen_enabled",
+    "BINANCE_SRC_JIEZHEN_MARGIN_USDT": "src_jiezhen_margin_usdt",
+    "BINANCE_SRC_JIEZHEN_LEVERAGE": "src_jiezhen_leverage",
+    "BINANCE_SRC_JIEZHEN_MAX_POSITIONS": "src_jiezhen_max_positions",
+    "BINANCE_SRC_JIEZHEN_EXPIRE_HOURS": "src_jiezhen_expire_hours",
 }
 
 DDL = """
@@ -104,7 +131,8 @@ CREATE TABLE IF NOT EXISTS positions (
     closed_at       TEXT,
     pnl_usdt        REAL,
     pnl_pct         REAL,
-    play            TEXT
+    play            TEXT,
+    source          TEXT
 );
 """
 
@@ -132,6 +160,12 @@ def get_db(write: bool = False) -> Generator[sqlite3.Connection, None, None]:
 def init_db() -> None:
     with get_db(write=True) as conn:
         conn.executescript(DDL)
+        # 存量 DB 迁移：positions 表加 source 列
+        try:
+            conn.execute("ALTER TABLE positions ADD COLUMN source TEXT")
+            logger.info("migrated: positions.source column added")
+        except Exception:
+            pass
         for env_key, config_key in _ENV_TO_CONFIG.items():
             env_val = os.getenv(env_key, "").strip()
             if env_val:
@@ -260,7 +294,49 @@ def _compute_expire_at(expire_hours: float) -> str:
     ).isoformat()
 
 
-def _resolve_expire_hours(play: Optional[str]) -> float:
+def source_enabled(source: str) -> bool:
+    """检查策略是否启用。zct_vwap 查 src_zct_vwap_enabled，其余查 src_{source}_enabled。"""
+    if not source:
+        return False
+    key = f"src_{source}_enabled"
+    return get_config(key, "false").lower() == "true"
+
+
+def get_source_config(source: str, key_suffix: str, default: str = "") -> str:
+    """获取策略配置: get_source_config('momentum', 'margin_usdt', '100')"""
+    if not source:
+        return default
+    key = f"src_{source}_{key_suffix}"
+    return get_config(key, default)
+
+
+def count_open_by_source(source: str) -> int:
+    """按 source 字段统计当前持仓数。"""
+    if not source:
+        return 0
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM positions WHERE status='open' AND source=?",
+            (source,),
+        ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def _resolve_expire_hours(play: Optional[str], source: str = "") -> float:
+    """计算持仓过期时间。
+
+    ZCT VWAP: 按 play(PLAY01/02/03) 分别读取 expire_hours_play*。
+    动量/接针: 按 source 读取 src_{source}_expire_hours。
+    """
+    # 动量/接针：按 source 读取
+    if source and source in ("momentum", "jiezhen"):
+        val = get_source_config(source, "expire_hours", "")
+        if val:
+            try:
+                return float(val)
+            except ValueError:
+                pass
+    # ZCT VWAP：按 play 读取
     if play:
         p = str(play).strip().upper()
         if p.startswith("PLAY01"):
@@ -276,7 +352,15 @@ def _resolve_expire_hours(play: Optional[str]) -> float:
                 return float(val)
             except ValueError:
                 pass
-    return float(get_config("position_expire_hours", "4"))
+    # 回退：各策略自己的 expire_hours
+    if source:
+        val = get_source_config(source, "expire_hours", "")
+        if val:
+            try:
+                return float(val)
+            except ValueError:
+                pass
+    return 4.0
 
 
 def count_open_by_play(play: Optional[str]) -> int:
@@ -323,20 +407,23 @@ def insert_position(
     leverage: Optional[int],
     opened_at: str,
     play: Optional[str] = None,
+    source: str = "",
 ) -> int:
-    expire_hours = _resolve_expire_hours(play)
+    expire_hours = _resolve_expire_hours(play, source=source)
+    logger.info("insert_position: symbol=%s side=%s source=%s play=%s expire_hours=%.1f",
+                 symbol, side, source, play, expire_hours)
     expire_at = _compute_expire_at(expire_hours)
     with get_db(write=True) as conn:
         cur = conn.execute(
             """INSERT INTO positions
                (signal_log_id, symbol, side, entry_order_id, sl_order_id,
                 tp_order_id, entry_price, sl_price, tp_price, quantity,
-                notional_usdt, leverage, opened_at, expire_at, status, play)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'open',?)""",
+                notional_usdt, leverage, opened_at, expire_at, status, play, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'open',?,?)""",
             (
                 signal_log_id, symbol, side, entry_order_id, sl_order_id,
                 tp_order_id, entry_price, sl_price, tp_price, quantity,
-                notional_usdt, leverage, opened_at, expire_at, play,
+                notional_usdt, leverage, opened_at, expire_at, play, source,
             ),
         )
         return cur.lastrowid

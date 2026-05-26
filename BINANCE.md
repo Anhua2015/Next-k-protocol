@@ -1,6 +1,6 @@
 # Binance Live Trading Bridge
 
-Binance Futures live trading module. Originally embedded in next-k-api, now standalone as Next-k-protocol service.
+Binance Futures live trading module. Supports ZCT VWAP / Momentum / Jiezhen three strategies. Originally embedded in next-k-api, now standalone as Next-k-protocol service.
 
 ## Key Behaviours
 
