@@ -279,18 +279,54 @@ def set_margin_type(symbol: str) -> None:
         raise
 
 
-def cancel_all_orders(symbol: str) -> None:
+def cancel_all_orders(symbol: str, pos: Optional[Dict[str, Any]] = None) -> bool:
+    """取消 symbol 的所有挂单（普通单 + algo 条件单）。
+
+    优先用 pos 里记录的 sl_order_id / tp_order_id 精确取消 SL/TP，
+    再用 openAlgoOrders 列表查询兜底（覆盖 DB 漏记 / 手动加挂的边角情况）。
+
+    返回 algo 段是否完全成功；普通单失败仅记 warning。
+    """
     try:
         _request("DELETE", "/fapi/v1/allOpenOrders", {"symbol": symbol})
     except Exception as exc:
         logger.warning("cancel_all_orders (regular) %s: %s", symbol, exc)
+
+    algo_ok = True
+    handled: set = set()
+
+    if pos:
+        for key in ("sl_order_id", "tp_order_id"):
+            aid = pos.get(key)
+            if not aid:
+                continue
+            aid = str(aid)
+            if aid in handled:
+                continue
+            handled.add(aid)
+            ok = cancel_algo_order(aid)
+            logger.info("cancel_all_orders %s %s=%s ok=%s", symbol, key, aid, ok)
+            if not ok:
+                algo_ok = False
+
     try:
         for o in get_open_algo_orders(symbol):
             aid = o.get("algoId") or o.get("clientAlgoId")
-            if aid:
-                cancel_algo_order(str(aid))
+            if not aid:
+                continue
+            aid = str(aid)
+            if aid in handled:
+                continue
+            handled.add(aid)
+            ok = cancel_algo_order(aid)
+            logger.info("cancel_all_orders %s fallback algoId=%s ok=%s", symbol, aid, ok)
+            if not ok:
+                algo_ok = False
     except Exception as exc:
-        logger.warning("cancel_all_orders (algo) %s: %s", symbol, exc)
+        logger.error("cancel_all_orders (algo list) %s: %s", symbol, exc)
+        algo_ok = False
+
+    return algo_ok
 
 
 def place_algo_order(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -301,12 +337,20 @@ def get_algo_order(algo_id: str) -> Dict[str, Any]:
     return _request("GET", "/fapi/v1/algoOrder", {"algoId": algo_id})
 
 
-def cancel_algo_order(algo_id: str) -> Optional[Dict[str, Any]]:
+def cancel_algo_order(algo_id: str) -> bool:
     try:
-        return _request("DELETE", "/fapi/v1/algoOrder", {"algoId": algo_id})
+        _request("DELETE", "/fapi/v1/algoOrder", {"algoId": algo_id})
+        return True
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code if exc.response is not None else 0
+        if 400 <= code < 500:
+            logger.info("cancel_algo_order %s: already gone (%s)", algo_id, code)
+            return True
+        logger.error("cancel_algo_order %s: http %s", algo_id, code)
+        return False
     except Exception as exc:
-        logger.warning("cancel_algo_order %s: %s", algo_id, exc)
-        return None
+        logger.error("cancel_algo_order %s: %s", algo_id, exc)
+        return False
 
 
 def get_open_algo_orders(symbol: str) -> List[Any]:
@@ -653,10 +697,20 @@ def close_position(
 
     # 平仓成功，清理 SL/TP 条件单
     try:
-        cancel_all_orders(symbol)
-        logger.info("close_position %s %s: orders cancelled", side, symbol)
+        ok = cancel_all_orders(symbol, pos)
+        if ok:
+            logger.info("close_position %s %s: orders cancelled", side, symbol)
+        else:
+            logger.error(
+                "close_position %s %s: SL/TP cancel FAILED, manual cleanup needed "
+                "sl=%s tp=%s",
+                side, symbol, pos.get("sl_order_id"), pos.get("tp_order_id"),
+            )
     except Exception as exc:
-        logger.warning("close_position cancel_all_orders %s: %s", symbol, exc)
+        logger.error(
+            "close_position cancel_all_orders %s %s: %s sl=%s tp=%s",
+            side, symbol, exc, pos.get("sl_order_id"), pos.get("tp_order_id"),
+        )
 
     _record_closed_position(pos, exit_rule, actual_close)
     logger.info(
@@ -801,7 +855,7 @@ def sync_open_positions() -> None:
 
             # 清理币安上残留的条件单(SL/TP)
             try:
-                cancel_all_orders(pos["symbol"])
+                cancel_all_orders(pos["symbol"], pos)
             except Exception as exc:
                 logger.warning("sync cancel_all_orders %s: %s", pos["symbol"], exc)
 
@@ -852,7 +906,7 @@ def expire_open_positions() -> None:
         close_price: Optional[float] = None
 
         try:
-            cancel_all_orders(symbol)
+            cancel_all_orders(symbol, pos)
         except Exception as exc:
             logger.warning("expire cancel_all_orders %s: %s", symbol, exc)
         try:
