@@ -618,14 +618,7 @@ def close_position(
     position_side = (pos["side"] if hedge else None)
     close_side = "SELL" if pos["side"] == "LONG" else "BUY"
 
-    # 取消 SL/TP 条件单
-    try:
-        cancel_all_orders(symbol)
-        logger.info("close_position %s %s: orders cancelled", side, symbol)
-    except Exception as exc:
-        logger.warning("close_position cancel_all_orders %s: %s", symbol, exc)
-
-    # MARKET 平仓
+    # MARKET 平仓（先平仓，成功后再清理 SL/TP，避免裸仓）
     actual_close: Optional[float] = None
     market_ok = False
     try:
@@ -653,10 +646,17 @@ def close_position(
 
     if not market_ok:
         logger.critical(
-            "close_position ABORTED %s %s: MARKET order failed, position left open on Binance",
+            "close_position ABORTED %s %s: MARKET order failed, SL/TP retained",
             side, symbol,
         )
         return False
+
+    # 平仓成功，清理 SL/TP 条件单
+    try:
+        cancel_all_orders(symbol)
+        logger.info("close_position %s %s: orders cancelled", side, symbol)
+    except Exception as exc:
+        logger.warning("close_position cancel_all_orders %s: %s", symbol, exc)
 
     _record_closed_position(pos, exit_rule, actual_close)
     logger.info(
@@ -740,6 +740,32 @@ def sync_open_positions() -> None:
 
             if close_reason == "unknown" and saw_pending_algo:
                 close_reason = "manual"
+
+            # 动量/接针只有 SL 单(无 TP)，若 SL 被 paper close 提前取消，
+            # sync 无法溯源，推断为 paper_close
+            if close_reason == "unknown" and not pos.get("tp_order_id"):
+                if pos.get("sl_order_id"):
+                    try:
+                        sl_info = get_algo_order(pos["sl_order_id"])
+                        sl_status = (sl_info.get("algoStatus") or "").upper()
+                        if sl_status in ("CANCELLED", "EXPIRED", "CANCELED"):
+                            close_reason = "paper_close"
+                            logger.info(
+                                "sync pos=%s %s: SL cancelled, infer paper_close",
+                                pos["id"], pos.get("symbol"),
+                            )
+                    except Exception:
+                        close_reason = "paper_close"
+                        logger.info(
+                            "sync pos=%s %s: SL not found, infer paper_close",
+                            pos["id"], pos.get("symbol"),
+                        )
+                else:
+                    close_reason = "paper_close"
+                    logger.info(
+                        "sync pos=%s %s: no SL/TP, infer paper_close",
+                        pos["id"], pos.get("symbol"),
+                    )
 
             if close_price is None:
                 try:
