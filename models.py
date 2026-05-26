@@ -146,7 +146,7 @@ class PositionOut(BaseModel):
     status: str = Field(..., description="持仓状态：'open'（持仓中）| 'closed'（已平仓）")
     close_reason: Optional[str] = Field(
         None,
-        description="平仓原因：'tp'(止盈) | 'sl'(止损) | 'expired'(到期) | 'manual'(手动) | 'unknown'(未知)",
+        description="平仓原因：'tp'(止盈) | 'sl'(止损) | 'expired'(到期) | 'manual'(手动) | 'paper_close'(纸面平仓) | 'external'(外部平仓) | 'unknown'(未知)",
     )
     close_price: Optional[float] = Field(None, description="平仓成交均价（USDT）")
     closed_at: Optional[str] = Field(None, description="平仓时间（UTC ISO8601）")

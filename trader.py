@@ -767,6 +767,32 @@ def sync_open_positions() -> None:
                         pos["id"], pos.get("symbol"),
                     )
 
+            # ZCT VWAP(或任何同时有 TP+SL 的仓位): 两张条件单都处于
+            # CANCELLED/EXPIRED 等终态但均未触发, 仓位在币安已消失,
+            # 推断为外部平仓(交易所强制平仓/系统取消等)
+            if close_reason == "unknown":
+                all_cancelled = True
+                for oid in (pos.get("tp_order_id"), pos.get("sl_order_id")):
+                    if not oid:
+                        all_cancelled = False
+                        break
+                    try:
+                        info = get_algo_order(oid)
+                        st = (info.get("algoStatus") or "").upper()
+                        if st not in ("CANCELLED", "EXPIRED", "CANCELED"):
+                            all_cancelled = False
+                            break
+                    except Exception:
+                        pass
+                if all_cancelled:
+                    close_reason = "paper_close"
+                else:
+                    close_reason = "external"
+                logger.info(
+                    "sync pos=%s %s: fallback close_reason=%s (all_cancelled=%s)",
+                    pos["id"], pos.get("symbol"), close_reason, all_cancelled,
+                )
+
             if close_price is None:
                 try:
                     close_price = get_mark_price(pos["symbol"])
