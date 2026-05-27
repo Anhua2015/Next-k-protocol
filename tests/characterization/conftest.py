@@ -62,6 +62,7 @@ def mock_binance(httpx_mock, load_binance_fixture):
             url=re.compile(rf"^{re.escape(BASE + path)}(\?.*)?$"),
             json=load_binance_fixture(fixture),
             is_reusable=True,
+            is_optional=True,
         )
 
     def _set(key: str, fixture_name: str, *, status_code: int = 200):

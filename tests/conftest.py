@@ -24,6 +24,9 @@ def _env_baseline(tmp_path, monkeypatch):
     monkeypatch.setenv("BINANCE_TESTNET", "true")
     monkeypatch.setenv("EMBED_SCHEDULER", "0")
     monkeypatch.delenv("PROTOCOL_CORS_ORIGINS", raising=False)
+    # Unset system proxy vars so httpx.Client() doesn't try SOCKS
+    for _proxy_var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(_proxy_var, raising=False)
     yield
 
 
