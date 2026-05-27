@@ -1,0 +1,9 @@
+{
+  "orderId": 22222222,
+  "symbol": "BTCUSDT",
+  "status": "NEW",
+  "executedQty": "0",
+  "type": "LIMIT",
+  "side": "BUY",
+  "price": "67000.00"
+}

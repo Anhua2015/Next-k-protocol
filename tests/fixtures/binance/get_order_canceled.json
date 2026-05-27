@@ -1,0 +1,7 @@
+{
+  "orderId": 22222222,
+  "symbol": "BTCUSDT",
+  "status": "CANCELED",
+  "executedQty": "0",
+  "type": "LIMIT"
+}
