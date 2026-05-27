@@ -23,6 +23,8 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 import db as _db
 from auth import require_auth
+from trader import close_position as do_close
+from trader import execute_trade
 from models import (
     ClosePositionRequest,
     ConfigUpdate,
@@ -69,10 +71,20 @@ async def health():
     - 负载均衡器的存活探针
     - 前端连接测试
     """
+    db_ok = True
+    try:
+        with _db.get_db() as conn:
+            conn.execute("SELECT 1").fetchone()
+    except Exception as exc:
+        db_ok = False
+        logger.warning("health check: DB probe failed: %s", exc)
+
+    status = "ok" if db_ok else "degraded"
     return {
-        "status": "ok",
+        "status": status,
         "module": "next-k-protocol",
         "version": "1.0.0",
+        "db": "ok" if db_ok else "fail",
     }
 
 
@@ -384,31 +396,31 @@ async def ingest_signals(body: SignalIngestRequest):
                 result["details"].append(detail)
                 continue
 
-        from trader import execute_trade
-
-        try:
-            ok = execute_trade({
-                "signal_log_id": signal_log_id,
-                "symbol": symbol,
-                "side": side,
-                "source": source,
-                "entry_price": float(sig.entry_price) if sig.entry_price is not None else None,
-                "sl_price": float(sig.sl_price) if sig.sl_price is not None else None,
-                "tp_price": float(sig.tp_price) if sig.tp_price is not None else None,
-                "notional_usdt": sig.notional_usdt,
-                "play": play,
-            })
-            detail["action"] = "traded" if ok else "error"
-            if ok:
-                result["traded"] += 1
-            else:
+            # execute_trade 必须在锁内执行：否则两个并发信号能同时通过上面的"持仓冲突/上限"
+            # 检查后双双下单。execute_trade 同步阻塞但单笔就几百 ms，吞吐影响可接受。
+            try:
+                ok = execute_trade({
+                    "signal_log_id": signal_log_id,
+                    "symbol": symbol,
+                    "side": side,
+                    "source": source,
+                    "entry_price": float(sig.entry_price) if sig.entry_price is not None else None,
+                    "sl_price": float(sig.sl_price) if sig.sl_price is not None else None,
+                    "tp_price": float(sig.tp_price) if sig.tp_price is not None else None,
+                    "notional_usdt": sig.notional_usdt,
+                    "play": play,
+                })
+                detail["action"] = "traded" if ok else "error"
+                if ok:
+                    result["traded"] += 1
+                else:
+                    result["errors"] += 1
+            except Exception as exc:
+                logger.error("ingest execute_trade %s %s: %s", side, symbol, exc)
+                _db.update_signal_status(signal_log_id, "error", str(exc))
+                detail["action"] = "error"
+                detail["error"] = str(exc)
                 result["errors"] += 1
-        except Exception as exc:
-            logger.error("ingest execute_trade %s %s: %s", side, symbol, exc)
-            _db.update_signal_status(signal_log_id, "error", str(exc))
-            detail["action"] = "error"
-            detail["error"] = str(exc)
-            result["errors"] += 1
 
         result["details"].append(detail)
 
@@ -486,8 +498,6 @@ async def close_position(body: ClosePositionRequest):
     }
     ```
     """
-    from trader import close_position as do_close
-
     logger.info(
         "close_position request: source=%s symbol=%s side=%s exit_rule=%s close_price=%s signal_id=%s",
         body.source, body.symbol, body.side, body.exit_rule, body.close_price, body.api_signal_id,

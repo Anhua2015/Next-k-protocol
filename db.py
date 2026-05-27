@@ -144,6 +144,10 @@ CREATE TABLE IF NOT EXISTS positions (
     source          TEXT,
     entry_deadline  TEXT
 );
+
+CREATE INDEX IF NOT EXISTS ix_positions_status        ON positions (status);
+CREATE INDEX IF NOT EXISTS ix_positions_status_symbol ON positions (status, symbol);
+CREATE INDEX IF NOT EXISTS ix_signals_status          ON signals_log (status);
 """
 
 

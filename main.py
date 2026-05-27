@@ -42,6 +42,27 @@ EMBED_SCHEDULER = os.getenv("EMBED_SCHEDULER", "1").strip().lower() in (
     "1", "true", "yes", "on",
 )
 
+# CORS 白名单：通过 PROTOCOL_CORS_ORIGINS 环境变量配置（逗号分隔）。
+# 默认仅允许本地（开发）；生产环境必须配置实际前端域名，例如：
+#   PROTOCOL_CORS_ORIGINS=https://app.example.com,https://staging.example.com
+def _parse_cors_origins() -> list[str]:
+    raw = os.getenv("PROTOCOL_CORS_ORIGINS", "").strip()
+    if not raw:
+        return [
+            "http://localhost",
+            "http://localhost:8000",
+            "http://localhost:8001",
+            "http://127.0.0.1",
+            "http://127.0.0.1:8000",
+            "http://127.0.0.1:8001",
+            "http://localhost:5173",
+            "http://localhost:5500",
+        ]
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+CORS_ORIGINS = _parse_cors_origins()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -67,7 +88,9 @@ async def lifespan(app: FastAPI):
 
     sch = getattr(app.state, "scheduler", None)
     if sch is not None:
-        sch.shutdown(wait=False)
+        # wait=True 让 scheduler 等正在运行的 job 跑完再退出，避免 promote_pending_to_open
+        # 等关键写操作中途被杀导致 DB 状态不一致。job 都不长（最多几秒），可接受。
+        sch.shutdown(wait=True)
         app.state.scheduler = None
     logger.info("Next K Protocol shutting down")
 
@@ -83,10 +106,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["X-Maintenance-Token", "Authorization", "Content-Type"],
 )
 
 from router import router

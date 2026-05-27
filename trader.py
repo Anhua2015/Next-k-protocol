@@ -68,6 +68,35 @@ _hedge_mode_lock = threading.Lock()
 
 _SYNC_AUTH_FAIL_COUNT = 0
 _SYNC_AUTH_FAIL_THRESHOLD = 20
+_SYNC_AUTH_FAIL_LOCK = threading.Lock()
+
+
+def _reset_auth_fail_count() -> None:
+    global _SYNC_AUTH_FAIL_COUNT
+    with _SYNC_AUTH_FAIL_LOCK:
+        _SYNC_AUTH_FAIL_COUNT = 0
+
+
+def _handle_auth_fail(context: str, pos_id: Any) -> None:
+    """sync / reconcile 共享：HTTP 401/403 时累加计数，超阈值禁用交易。"""
+    global _SYNC_AUTH_FAIL_COUNT
+    with _SYNC_AUTH_FAIL_LOCK:
+        _SYNC_AUTH_FAIL_COUNT += 1
+        count = _SYNC_AUTH_FAIL_COUNT
+    if count >= _SYNC_AUTH_FAIL_THRESHOLD:
+        set_config("enabled", "false")
+        logger.critical(
+            "Binance auth failed %d times; DISABLED trading (rotate API key then re-enable)",
+            count,
+        )
+    else:
+        logger.warning("%s pos=%s auth-fail %d/%d", context, pos_id, count, _SYNC_AUTH_FAIL_THRESHOLD)
+
+
+# 模块级 httpx.Client 单例：复用 TCP 连接，避免高频下单时频繁建链耗尽本地端口。
+# httpx.Client 本身线程安全，可在多线程 scheduler 中并发使用。
+_HTTP_CLIENT = httpx.Client(timeout=10.0)
+_HTTP_CLIENT_TIME_SYNC = httpx.Client(timeout=5.0)
 
 
 def _now_utc() -> str:
@@ -95,10 +124,9 @@ def _sync_server_time() -> None:
     global _ts_offset_ms, _last_sync_ts
     try:
         url = _base_url() + "/fapi/v1/time"
-        with httpx.Client(timeout=5.0) as client:
-            resp = client.get(url)
-            resp.raise_for_status()
-            srv = int(resp.json()["serverTime"])
+        resp = _HTTP_CLIENT_TIME_SYNC.get(url)
+        resp.raise_for_status()
+        srv = int(resp.json()["serverTime"])
         with _ts_offset_lock:
             _ts_offset_ms = srv - _local_ms()
             _last_sync_ts = time.time()
@@ -129,15 +157,14 @@ def _request(
     last_exc: Optional[Exception] = None
     for attempt in range(MAX_RETRIES + 1):
         try:
-            with httpx.Client(timeout=10.0) as client:
-                if method == "GET":
-                    resp = client.get(url, params=params, headers=_headers())
-                elif method == "POST":
-                    resp = client.post(url, params=params, headers=_headers())
-                elif method == "DELETE":
-                    resp = client.delete(url, params=params, headers=_headers())
-                else:
-                    raise ValueError(f"Unsupported method: {method}")
+            if method == "GET":
+                resp = _HTTP_CLIENT.get(url, params=params, headers=_headers())
+            elif method == "POST":
+                resp = _HTTP_CLIENT.post(url, params=params, headers=_headers())
+            elif method == "DELETE":
+                resp = _HTTP_CLIENT.delete(url, params=params, headers=_headers())
+            else:
+                raise ValueError(f"Unsupported method: {method}")
 
             if resp.status_code in RETRY_STATUSES:
                 last_exc = httpx.HTTPStatusError(
@@ -829,7 +856,6 @@ def close_position(
 
 
 def sync_open_positions() -> None:
-    global _SYNC_AUTH_FAIL_COUNT
     if not get_config("binance_api_key", ""):
         return
     if get_config("enabled", "false").lower() != "true":
@@ -838,7 +864,7 @@ def sync_open_positions() -> None:
     for pos in get_open_positions():
         try:
             if get_live_position(pos["symbol"]) is not None:
-                _SYNC_AUTH_FAIL_COUNT = 0
+                _reset_auth_fail_count()
                 continue
 
             close_reason = "unknown"
@@ -968,20 +994,12 @@ def sync_open_positions() -> None:
                 logger.warning("sync cancel_all_orders %s: %s", pos["symbol"], exc)
 
             _record_closed_position(pos, close_reason, close_price)
-            _SYNC_AUTH_FAIL_COUNT = 0
+            _reset_auth_fail_count()
 
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code if exc.response is not None else 0
             if code in (401, 403):
-                _SYNC_AUTH_FAIL_COUNT += 1
-                if _SYNC_AUTH_FAIL_COUNT >= _SYNC_AUTH_FAIL_THRESHOLD:
-                    set_config("enabled", "false")
-                    logger.critical(
-                        "Binance auth failed %d times; DISABLED trading (rotate API key then re-enable)",
-                        _SYNC_AUTH_FAIL_COUNT,
-                    )
-                else:
-                    logger.warning("sync pos=%s auth-fail %d/%d", pos["id"], _SYNC_AUTH_FAIL_COUNT, _SYNC_AUTH_FAIL_THRESHOLD)
+                _handle_auth_fail("sync", pos["id"])
             else:
                 logger.warning("sync pos=%s: %s", pos["id"], exc)
         except Exception as exc:
@@ -998,7 +1016,6 @@ def reconcile_pending_entries() -> None:
     - NEW             到 deadline   -> cancel + cancelled_pending(timeout)
     - CANCELED/REJECTED/EXPIRED     -> cancelled_pending(rejected)
     """
-    global _SYNC_AUTH_FAIL_COUNT
     if not get_config("binance_api_key", ""):
         return
     if get_config("enabled", "false").lower() != "true":
@@ -1011,20 +1028,11 @@ def reconcile_pending_entries() -> None:
     for pos in pending:
         try:
             _reconcile_one_pending(pos)
-            _SYNC_AUTH_FAIL_COUNT = 0
+            _reset_auth_fail_count()
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code if exc.response is not None else 0
             if code in (401, 403):
-                _SYNC_AUTH_FAIL_COUNT += 1
-                if _SYNC_AUTH_FAIL_COUNT >= _SYNC_AUTH_FAIL_THRESHOLD:
-                    set_config("enabled", "false")
-                    logger.critical(
-                        "Binance auth failed %d times; DISABLED trading (rotate API key then re-enable)",
-                        _SYNC_AUTH_FAIL_COUNT,
-                    )
-                else:
-                    logger.warning("reconcile pos=%s auth-fail %d/%d",
-                                   pos["id"], _SYNC_AUTH_FAIL_COUNT, _SYNC_AUTH_FAIL_THRESHOLD)
+                _handle_auth_fail("reconcile", pos["id"])
             else:
                 logger.warning("reconcile pos=%s: %s", pos["id"], exc)
         except Exception as exc:
@@ -1198,6 +1206,7 @@ def expire_open_positions() -> None:
         position_side = (side if hedge else None)
         close_side = "SELL" if side == "LONG" else "BUY"
         close_price: Optional[float] = None
+        market_ok = False
 
         try:
             cancel_all_orders(symbol, pos)
@@ -1218,8 +1227,17 @@ def expire_open_positions() -> None:
             avg = resp.get("avgPrice")
             if avg and float(avg) > 0:
                 close_price = float(avg)
+            market_ok = True
         except Exception as exc:
-            logger.error("expire close FAILED pos=%s %s: %s", pos["id"], symbol, exc)
+            market_ok = False
+            logger.critical(
+                "expire close FAILED pos=%s %s: %s — POSITION REMAINS OPEN, manual intervention required",
+                pos["id"], symbol, exc,
+            )
+
+        if not market_ok:
+            # 平仓失败：保留 open 状态，下一轮 expire 会重试。不要伪造 closed 记录。
+            continue
 
         if close_price is None:
             try:

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 
@@ -52,7 +53,7 @@ def verify_token(
             _warned_open_mode = True
         return
     provided = _extract_token(x_maintenance_token, authorization)
-    if not provided or provided != expected:
+    if not provided or not hmac.compare_digest(provided, expected):
         raise AuthError("maintenance_token_required")
 
 
