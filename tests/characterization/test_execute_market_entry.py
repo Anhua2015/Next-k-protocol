@@ -35,6 +35,7 @@ def _payload(**overrides):
 
 
 def test_market_entry_full_flow(seeded_config, mock_binance):
+    mock_binance.all()
     client = _client(seeded_config)
     resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
     body = resp.json()
@@ -49,6 +50,7 @@ def test_market_entry_full_flow(seeded_config, mock_binance):
 
 
 def test_market_entry_short_uses_sell_side(seeded_config, mock_binance):
+    mock_binance.all()
     client = _client(seeded_config)
     resp = client.post(
         "/api/binance/signals/ingest",
@@ -63,6 +65,7 @@ def test_market_entry_short_uses_sell_side(seeded_config, mock_binance):
 
 def test_market_entry_min_notional_rejection(seeded_config, mock_binance):
     """margin*leverage / mark_px * mark_px < minNotional -> status=error."""
+    mock_binance.all()
     seeded_config.set_config("margin_usdt", "0.01")
     seeded_config.set_config("leverage", "1")
     client = _client(seeded_config)
@@ -73,6 +76,7 @@ def test_market_entry_min_notional_rejection(seeded_config, mock_binance):
 
 
 def test_market_entry_invalid_margin_returns_error(seeded_config, mock_binance):
+    mock_binance.all()
     seeded_config.set_config("margin_usdt", "0")
     client = _client(seeded_config)
     resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)

@@ -14,7 +14,6 @@ AUTH = {"X-Maintenance-Token": "test-token"}
 
 
 def _client(seeded_config):
-    """Build a TestClient with the seeded DB module already loaded."""
     import importlib
     import sys
     for mod in ("main", "router", "trader"):
@@ -63,6 +62,7 @@ def test_invalid_source_rejected(seeded_config, mock_binance):
 
 
 def test_duplicate_signal_skipped(seeded_config, mock_binance):
+    mock_binance.all()
     client = _client(seeded_config)
     client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
     resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
@@ -84,6 +84,7 @@ def test_source_disabled_skipped(seeded_config, mock_binance):
 
 def test_position_conflict_skipped(seeded_config, mock_binance):
     """Open BTC, then send another BTC signal — second one skipped."""
+    mock_binance.all()
     client = _client(seeded_config)
     client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
     resp = client.post(
