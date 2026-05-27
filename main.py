@@ -72,6 +72,20 @@ async def lifespan(app: FastAPI):
     db.init_db()
     logger.info("Database initialized: %s", str(db.DB_PATH))
 
+    # Initialize Binance HTTP client (Phase 1)
+    from binance.client import init_client
+    from db import get_config
+    init_client(
+        base_url_fn=lambda: (
+            "https://testnet.binancefuture.com"
+            if get_config("testnet", "false").lower() == "true"
+            else "https://fapi.binance.com"
+        ),
+        api_key_fn=lambda: get_config("binance_api_key", ""),
+        secret_fn=lambda: get_config("binance_api_secret", ""),
+    )
+    logger.info("Binance HTTP client initialized")
+
     if EMBED_SCHEDULER:
         import pytz
         tz = pytz.timezone("Asia/Shanghai")

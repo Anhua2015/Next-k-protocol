@@ -47,7 +47,7 @@ def fresh_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def seeded_config(fresh_db):
-    """Apply a sane default trading config for tests that need it."""
+    """Apply a sane default trading config + init binance client for tests."""
     fresh_db.set_config_batch({
         "enabled": "true",
         "testnet": "true",
@@ -66,6 +66,25 @@ def seeded_config(fresh_db):
         "binance_api_key": "test-key",
         "binance_api_secret": "test-secret",
     })
+    # Init/reset the binance HTTP client (Phase 1 lazy singleton)
+    import sys
+    import binance.account as _bacct
+    sys.modules.pop("trader", None)
+    from binance.client import init_client
+    from db import get_config as _cfg
+    init_client(
+        base_url_fn=lambda: (
+            "https://testnet.binancefuture.com"
+            if _cfg("testnet", "false").lower() == "true"
+            else "https://fapi.binance.com"
+        ),
+        api_key_fn=lambda: _cfg("binance_api_key", ""),
+        secret_fn=lambda: _cfg("binance_api_secret", ""),
+    )
+    # Clear caches that persist across test DB reloads
+    _bacct._hedge_mode_cache = None
+    import binance.exchange_info as _exch
+    _exch._exch_cache.clear()
     return fresh_db
 
 
