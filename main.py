@@ -106,7 +106,9 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
+    # 临时放开到 * 以便线上前端能跨域访问；建议尽快配 PROTOCOL_CORS_ORIGINS
+    # 环境变量后改回白名单（参考 _parse_cors_origins 注释）。
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["X-Maintenance-Token", "Authorization", "Content-Type"],
