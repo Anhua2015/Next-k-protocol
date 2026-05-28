@@ -54,6 +54,20 @@ from binance.time_sync import (
     RECV_WINDOW_MS, SERVER_TIME_RESYNC_SEC,
     now_utc as _now_utc, server_timestamp_ms,
 )
+# Phase 2 imports
+from binance.orders import (
+    cancel_algo_order as _cancel_algo,
+    cancel_all_orders as _cancel_all,
+    cancel_order_by_id as _cancel_oid,
+    get_algo_order as _get_algo,
+    get_open_algo_orders as _get_open_algos,
+    place_algo_order as _place_algo,
+    place_order as _place_order,
+)
+from trading.protective import (
+    emergency_close as _emergency_close,
+    validate_sl_distance as _validate_sl_distance,
+)
 
 logger = logging.getLogger("trader")
 
@@ -113,173 +127,30 @@ def get_order(symbol, order_id):    return _get_order_fn(_resolve_client(), symb
 def set_leverage(symbol, leverage): return _set_lev_fn(_resolve_client(), symbol, leverage)
 def set_margin_type(symbol):        return _set_margin_fn(_resolve_client(), symbol)
 
+# Phase 2 wrappers
+def place_order(p):                 return _place_order(_resolve_client(), p)
+def place_algo_order(p):            return _place_algo(_resolve_client(), p)
+def get_algo_order(aid):            return _get_algo(_resolve_client(), aid)
+def cancel_algo_order(aid):         return _cancel_algo(_resolve_client(), aid)
+def cancel_order_by_id(s, oid):     return _cancel_oid(_resolve_client(), s, oid)
+def get_open_algo_orders(s):        return _get_open_algos(_resolve_client(), s)
+def cancel_all_orders(s, p=None):   return _cancel_all(_resolve_client(), s, p)
+def _build_protective(s, cs, sp, q, ps, k):   return __import__("trading.protective", fromlist=["build_protective_params"]).build_protective_params(s, cs, sp, q, ps, k)
+def _place_protective(s, cs, sp, q, ps, ts, k): return place_algo_order(_build_protective(s, cs, sp, q, ps, k))
 
-# -- Orders / Algo (stay in trader.py until Phase 2) --------------------------
+# _emergency_close and _validate_sl_distance are already imported — they take client as 1st arg
+# Replace the imported versions with auto-inject wrappers
+_emergency_close_raw = _emergency_close
+_validate_sl_distance_raw = _validate_sl_distance
 
-def place_order(params: Dict[str, Any]) -> Dict[str, Any]:
-    return _resolve_client().request("POST", "/fapi/v1/order", params)
+def _emergency_close_wrapped(symbol, side, qty, position_side):
+    return _emergency_close_raw(_resolve_client(), symbol, side, qty, position_side)
 
+def _validate_sl_distance_wrapped(side, sl_price, mark_px, tick):
+    return _validate_sl_distance_raw(side, sl_price, mark_px, tick)
 
-def place_algo_order(params: Dict[str, Any]) -> Dict[str, Any]:
-    return _resolve_client().request("POST", "/fapi/v1/algoOrder", params)
-
-
-def get_algo_order(algo_id: str) -> Dict[str, Any]:
-    return _resolve_client().request("GET", "/fapi/v1/algoOrder", {"algoId": algo_id})
-
-
-def cancel_algo_order(algo_id: str) -> bool:
-    try:
-        _resolve_client().request("DELETE", "/fapi/v1/algoOrder", {"algoId": algo_id})
-        return True
-    except httpx.HTTPStatusError as exc:
-        code = exc.response.status_code if exc.response is not None else 0
-        if 400 <= code < 500:
-            logger.info("cancel_algo_order %s: already gone (%s)", algo_id, code)
-            return True
-        logger.error("cancel_algo_order %s: http %s", algo_id, code)
-        return False
-    except Exception as exc:
-        logger.error("cancel_algo_order %s: %s", algo_id, exc)
-        return False
-
-
-def cancel_order_by_id(symbol: str, order_id: str) -> bool:
-    try:
-        _resolve_client().request("DELETE", "/fapi/v1/order",
-                                   {"symbol": symbol, "orderId": order_id})
-        return True
-    except httpx.HTTPStatusError as exc:
-        code = exc.response.status_code if exc.response is not None else 0
-        if 400 <= code < 500:
-            logger.info("cancel_order_by_id %s %s: already gone (%s)", symbol, order_id, code)
-            return True
-        logger.error("cancel_order_by_id %s %s: http %s", symbol, order_id, code)
-        return False
-    except Exception as exc:
-        logger.error("cancel_order_by_id %s %s: %s", symbol, order_id, exc)
-        return False
-
-
-def get_open_algo_orders(symbol: str) -> List[Any]:
-    try:
-        data = _resolve_client().request("GET", "/fapi/v1/openAlgoOrders",
-                                         {"symbol": symbol})
-        if isinstance(data, list):
-            return data
-        return data.get("orders", []) if isinstance(data, dict) else []
-    except Exception as exc:
-        logger.warning("get_open_algo_orders %s: %s", symbol, exc)
-        return []
-
-
-def cancel_all_orders(symbol: str, pos: Optional[Dict[str, Any]] = None) -> bool:
-    try:
-        _resolve_client().request("DELETE", "/fapi/v1/allOpenOrders",
-                                  {"symbol": symbol})
-    except Exception as exc:
-        logger.warning("cancel_all_orders (regular) %s: %s", symbol, exc)
-
-    algo_ok = True
-    handled: set = set()
-
-    if pos:
-        for key in ("sl_order_id", "tp_order_id"):
-            aid = pos.get(key)
-            if not aid:
-                continue
-            aid = str(aid)
-            if aid in handled:
-                continue
-            handled.add(aid)
-            ok = cancel_algo_order(aid)
-            logger.info("cancel_all_orders %s %s=%s ok=%s", symbol, key, aid, ok)
-            if not ok:
-                algo_ok = False
-
-    try:
-        for o in get_open_algo_orders(symbol):
-            aid = o.get("algoId") or o.get("clientAlgoId")
-            if not aid:
-                continue
-            aid = str(aid)
-            if aid in handled:
-                continue
-            handled.add(aid)
-            ok = cancel_algo_order(aid)
-            logger.info("cancel_all_orders %s fallback algoId=%s ok=%s", symbol, aid, ok)
-            if not ok:
-                algo_ok = False
-    except Exception as exc:
-        logger.error("cancel_all_orders (algo list) %s: %s", symbol, exc)
-        algo_ok = False
-
-    return algo_ok
-
-
-# -- Emergency close + protective orders --------------------------------------
-
-def _emergency_close(
-    symbol: str, side: str, qty: float, position_side: Optional[str],
-) -> Optional[str]:
-    close_side = "SELL" if side == "LONG" else "BUY"
-    params: Dict[str, Any] = {
-        "symbol": symbol, "side": close_side, "type": "MARKET",
-        "quantity": qty, "reduceOnly": "true",
-    }
-    if position_side:
-        params["positionSide"] = position_side
-        params.pop("reduceOnly", None)
-    try:
-        resp = place_order(params)
-        oid = str(resp.get("orderId", ""))
-        logger.error("EMERGENCY close %s %s qty=%s order=%s", side, symbol, qty, oid)
-        return oid
-    except Exception as exc:
-        logger.critical(
-            "EMERGENCY close FAILED %s %s qty=%s — POSITION IS NAKED: %s",
-            side, symbol, qty, exc,
-        )
-        return None
-
-
-def _build_protective(
-    symbol: str, close_side: str, stop_price: float, qty: float,
-    position_side: Optional[str], kind: str,
-) -> Dict[str, Any]:
-    order_type = "STOP_MARKET" if kind == "SL" else "TAKE_PROFIT_MARKET"
-    params: Dict[str, Any] = {
-        "algoType": "CONDITIONAL", "symbol": symbol, "side": close_side,
-        "type": order_type, "triggerPrice": stop_price,
-        "workingType": "MARK_PRICE", "quantity": qty, "priceProtect": "false",
-    }
-    if position_side:
-        params["positionSide"] = position_side
-    else:
-        params["reduceOnly"] = "true"
-    return params
-
-
-def _place_protective(
-    symbol: str, close_side: str, stop_price: float, qty: float,
-    position_side: Optional[str], tick_size: str, kind: str,
-) -> Dict[str, Any]:
-    params = _build_protective(symbol, close_side, stop_price, qty, position_side, kind)
-    return place_algo_order(params)
-
-
-def _validate_sl_distance(side: str, sl_price: float, mark_px: float, tick: str) -> None:
-    try:
-        tick_f = float(tick)
-    except ValueError:
-        tick_f = 0.0
-    margin = max(tick_f * 2.0, mark_px * 0.0005)
-    if side == "LONG" and sl_price >= mark_px - margin:
-        raise ValueError(
-            f"SL {sl_price} too close to mark {mark_px} (need <= {mark_px - margin:.6f})")
-    if side == "SHORT" and sl_price <= mark_px + margin:
-        raise ValueError(
-            f"SL {sl_price} too close to mark {mark_px} (need >= {mark_px + margin:.6f})")
+_emergency_close = _emergency_close_wrapped
+_validate_sl_distance = _validate_sl_distance_wrapped
 
 
 # -- execute_trade ------------------------------------------------------------
