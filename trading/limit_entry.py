@@ -29,18 +29,13 @@ def open_limit(
     play: str,
 ) -> LimitEntryResult:
     """执行 LIMIT 限价单入场，写入 pending_entry。"""
-    from trader import (
-        _round_price,
-        _round_quantity,
-        compute_pending_deadline,
-        get_config,
-        get_mark_price,
-        get_source_config,
-        insert_pending_position,
-        place_order,
-        update_signal_status,
-        _now_utc,
+    from binance.time_sync import now_utc as _now_utc
+    from binance.exchange_info import round_price as _round_price, round_quantity as _round_quantity
+    from db import (
+        compute_pending_deadline, get_config, get_source_config,
+        insert_pending_position, update_signal_status,
     )
+    from trader import place_order
 
     signal_log_id = signal["signal_log_id"]
     order_side = "BUY" if side == "LONG" else "SELL"

@@ -252,184 +252,35 @@ async def ingest_signals(body: SignalIngestRequest):
     }
     ```
     """
-    result: dict = {"scanned": 0, "traded": 0, "skipped": 0, "errors": 0, "details": []}
-
-    if _db.get_config("enabled", "false").lower() != "true":
-        logger.info("ingest: trading disabled, skipped=%d", len(body.signals))
-        for sig in body.signals:
-            result["scanned"] += 1
-            result["skipped"] += 1
-            result["details"].append({"api_signal_id": sig.api_signal_id, "symbol": sig.symbol, "source": sig.source, "action": "skipped_disabled"})
-        return SignalIngestResult(**result)
-
+    # Phase 5: delegate to ingest/ pipeline.
+    # Build ctx config once, then process batch.
     try:
         max_pos = int(_db.get_config("max_positions", "8"))
     except ValueError:
         max_pos = 8
 
-    _play_max = {}
-    for _pn in ("play01", "play02", "play03"):
+    play_max: dict = {}
+    for pn in ("play01", "play02", "play03"):
         try:
-            _play_max[_pn] = int(_db.get_config(f"max_positions_{_pn}", "5"))
+            play_max[pn] = int(_db.get_config(f"max_positions_{pn}", "5"))
         except ValueError:
-            _play_max[_pn] = 5
+            play_max[pn] = 5
 
-    def _play_max_for(p: str) -> int:
-        if not p:
-            return max_pos
-        pu = p.strip().upper()
-        for _k in ("PLAY01", "PLAY02", "PLAY03"):
-            if pu.startswith(_k):
-                return _play_max.get(_k.lower(), 5)
-        return max_pos
-
-    def _source_max_positions(source: str) -> int:
+    source_max: dict = {}
+    for src in ("momentum", "jiezhen"):
         try:
-            return int(_db.get_source_config(source, "max_positions", "5"))
+            source_max[src] = int(_db.get_source_config(src, "max_positions", "5"))
         except ValueError:
-            return 5
+            source_max[src] = 5
 
-    result["scanned"] = len(body.signals)
+    from ingest.pipeline import process_signal_batch
 
-    for sig in body.signals:
-        symbol = sig.symbol
-        side = sig.side
-        source = sig.source
-        play = sig.play or ""
-
-        detail: dict = {
-            "api_signal_id": sig.api_signal_id, "symbol": symbol,
-            "side": side, "source": source,
-        }
-
-        logger.info(
-            "ingest signal: source=%s id=%s symbol=%s side=%s play=%s entry=%s sl=%s tp=%s confidence=%s regime=%s notional=%s",
-            source, sig.api_signal_id, symbol, side, play,
-            sig.entry_price, sig.sl_price, sig.tp_price,
-            sig.confidence, sig.regime, sig.notional_usdt,
+    with _db._db_write_lock:
+        result_data = process_signal_batch(
+            body.signals, _db, max_pos, play_max, source_max,
         )
 
-        with _db._db_write_lock:
-            # 先入库（所有信号均记录到 signals_log）
-            signal_log_id = _db.insert_signal(
-                source=source,
-                api_signal_id=sig.api_signal_id,
-                symbol=symbol,
-                side=side,
-                entry_price=sig.entry_price,
-                sl_price=sig.sl_price,
-                tp_price=sig.tp_price,
-                confidence=sig.confidence,
-                regime=sig.regime,
-                notional_usdt=sig.notional_usdt,
-                received_at=_now_utc(),
-                play=play,
-            )
-            if signal_log_id is None:
-                logger.info("ingest skip %s %s: duplicate (source=%s id=%s)", side, symbol, source, sig.api_signal_id)
-                detail["action"] = "duplicate"
-                result["skipped"] += 1
-                result["details"].append(detail)
-                continue
-
-            # 信号来源验证
-            if source not in _VALID_SOURCES:
-                skip_reason = f"invalid source={source}"
-                _db.update_signal_status(signal_log_id, "skipped_invalid_source", skip_reason)
-                logger.warning("ingest skip %s %s: %s", side, symbol, skip_reason)
-                detail["action"] = "skipped_invalid_source"
-                result["skipped"] += 1
-                result["details"].append(detail)
-                continue
-
-            # 策略开关检查
-            if not _db.source_enabled(source):
-                skip_reason = f"source={source} disabled"
-                _db.update_signal_status(signal_log_id, "skipped_source_disabled", skip_reason)
-                logger.info("ingest skip %s %s: %s", side, symbol, skip_reason)
-                detail["action"] = "skipped_source_disabled"
-                result["skipped"] += 1
-                result["details"].append(detail)
-                continue
-
-            # 同币种持仓冲突
-            if _db.get_open_position_for_symbol(symbol) is not None:
-                _db.update_signal_status(signal_log_id, "skipped_position_exists", "open position for symbol")
-                logger.info("ingest skip %s %s: position already open", side, symbol)
-                detail["action"] = "skipped_position_exists"
-                result["skipped"] += 1
-                result["details"].append(detail)
-                continue
-
-            # 策略仓位上限检查
-            if source == "zct_vwap":
-                play_max = _play_max_for(play)
-                play_open = _db.count_open_by_play(play)
-                if play_open >= play_max:
-                    skip_reason = f"play={play} max={play_max} open={play_open}"
-                    _db.update_signal_status(signal_log_id, "skipped_max_positions", skip_reason)
-                    logger.info("ingest skip %s %s: %s", side, symbol, skip_reason)
-                    detail["action"] = "skipped_max_positions"
-                    result["skipped"] += 1
-                    result["details"].append(detail)
-                    continue
-            else:
-                src_max = _source_max_positions(source)
-                src_open = _db.count_open_by_source(source)
-                if src_open >= src_max:
-                    skip_reason = f"source={source} max={src_max} open={src_open}"
-                    _db.update_signal_status(signal_log_id, "skipped_max_positions", skip_reason)
-                    logger.info("ingest skip %s %s: %s", side, symbol, skip_reason)
-                    detail["action"] = "skipped_max_positions"
-                    result["skipped"] += 1
-                    result["details"].append(detail)
-                    continue
-
-            # 全局仓位上限
-            open_count = _db.count_open_total()
-            if open_count >= max_pos:
-                skip_reason = f"global max={max_pos} open={open_count}"
-                _db.update_signal_status(signal_log_id, "skipped_max_positions", skip_reason)
-                logger.info("ingest skip %s %s: %s", side, symbol, skip_reason)
-                detail["action"] = "skipped_max_positions"
-                result["skipped"] += 1
-                result["details"].append(detail)
-                continue
-
-            # execute_trade 必须在锁内执行：否则两个并发信号能同时通过上面的"持仓冲突/上限"
-            # 检查后双双下单。execute_trade 同步阻塞但单笔就几百 ms，吞吐影响可接受。
-            try:
-                ok = execute_trade({
-                    "signal_log_id": signal_log_id,
-                    "symbol": symbol,
-                    "side": side,
-                    "source": source,
-                    "entry_price": float(sig.entry_price) if sig.entry_price is not None else None,
-                    "sl_price": float(sig.sl_price) if sig.sl_price is not None else None,
-                    "tp_price": float(sig.tp_price) if sig.tp_price is not None else None,
-                    "notional_usdt": sig.notional_usdt,
-                    "play": play,
-                })
-                detail["action"] = "traded" if ok else "error"
-                if ok:
-                    result["traded"] += 1
-                else:
-                    result["errors"] += 1
-            except Exception as exc:
-                logger.error("ingest execute_trade %s %s: %s", side, symbol, exc)
-                _db.update_signal_status(signal_log_id, "error", str(exc))
-                detail["action"] = "error"
-                detail["error"] = str(exc)
-                result["errors"] += 1
-
-        result["details"].append(detail)
-
-    if result["scanned"]:
-        logger.info(
-            "ingest complete: scanned=%d traded=%d skipped=%d errors=%d",
-            result["scanned"], result["traded"], result["skipped"], result["errors"],
-        )
-    return SignalIngestResult(**result)
+    return result_data
 
 
 # ---------------------------------------------------------------------------

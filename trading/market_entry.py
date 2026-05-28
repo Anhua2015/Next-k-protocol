@@ -34,20 +34,16 @@ def open_market(
     play: str,
 ) -> MarketEntryResult:
     """执行 MARKET 市价单入场，返回 MarketEntryResult。"""
+    from binance.time_sync import now_utc as _now_utc
+    from binance.exchange_info import round_price as _round_price, round_quantity as _round_quantity
+    from db import insert_position, update_signal_status
     from trader import (
-        _get_filters,
-        _round_price,
-        _round_quantity,
-        cancel_all_orders,
-        get_mark_price,
-        get_order,
-        insert_position,
-        place_order,
-        update_signal_status,
         _emergency_close,
-        _now_utc,
         _place_protective,
         _validate_sl_distance,
+        cancel_all_orders,
+        get_order,
+        place_order,
     )
 
     signal_log_id = signal["signal_log_id"]
