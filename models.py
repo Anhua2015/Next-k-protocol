@@ -95,6 +95,15 @@ class SignalIngestResult(BaseModel):
     )
 
 
+class UpdateSlRequest(BaseModel):
+    """动态修改止损价请求，由 Moss Quant 移动止损触发。"""
+
+    new_sl_price: float = Field(
+        ...,
+        description="新的止损触发价格",
+    )
+
+
 class ClosePositionRequest(BaseModel):
     """平仓请求，由 next-k-api 在 trail 触发退出后推送。"""
 
@@ -122,6 +131,10 @@ class ClosePositionRequest(BaseModel):
     close_price: Optional[float] = Field(
         None,
         description="建议平仓价（纸面记录的退出价），实盘按 MARKET 成交",
+    )
+    position_id: Optional[int] = Field(
+        None,
+        description="指定平仓的持仓 ID。Moss Quant 同 symbol 多仓时需精确指定",
     )
 
 

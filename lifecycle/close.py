@@ -4,8 +4,6 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-import httpx
-
 from binance.time_sync import now_utc as _now_utc
 
 logger = logging.getLogger("lifecycle.close")
@@ -52,23 +50,49 @@ def _record_closed_position(
         source=pos.get("source", ""), close_reason=close_reason).inc()
 
 
+def _get_latest_open_for_symbol_source(
+    symbol: str, source: str,
+) -> Optional[Dict[str, Any]]:
+    """查询指定 symbol+source 的最新 open 持仓（ORDER BY id DESC）。"""
+    from repos.connection import get_db
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM positions "
+            "WHERE status IN ('open','pending_entry') AND symbol=? AND source=? "
+            "ORDER BY id DESC LIMIT 1",
+            (symbol, source),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def close_position(
     source: str, symbol: str, side: str,
     exit_rule: str, close_price: Optional[float] = None,
+    position_id: Optional[int] = None,
 ) -> bool:
     """平仓：取消 SL/TP 条件单 + MARKET 平仓 + 记录 PnL。"""
-    from db import cancel_pending_position, get_open_position_for_symbol, update_signal_status
+    from db import (
+        cancel_pending_position, get_open_position_for_symbol,
+        get_position_by_id, update_signal_status,
+    )
     from trader import (
         _detect_hedge_mode,
+        cancel_algo_order,
         cancel_all_orders,
         cancel_order_by_id,
         place_order,
     )
 
-    logger.info("close_position: source=%s symbol=%s side=%s rule=%s close=%s",
-                source, symbol, side, exit_rule, close_price)
+    logger.info("close_position: source=%s symbol=%s side=%s rule=%s close=%s pos_id=%s",
+                source, symbol, side, exit_rule, close_price, position_id)
 
-    pos = get_open_position_for_symbol(symbol)
+    if position_id:
+        pos = get_position_by_id(position_id)
+    elif source == "moss_quant":
+        # moss_quant 同 symbol 可有多仓（滚仓），取最新 open 持仓
+        pos = _get_latest_open_for_symbol_source(symbol, source)
+    else:
+        pos = get_open_position_for_symbol(symbol)
     if pos is None:
         logger.warning("close_position %s %s: no open position", side, symbol)
         return False
@@ -122,9 +146,20 @@ def close_position(
         return False
 
     try:
-        cancel_all_orders(symbol, pos)
+        # moss_quant / 指定 position_id：精确取消，不误伤同 symbol 其他仓
+        if position_id or source == "moss_quant":
+            sl_id = pos.get("sl_order_id")
+            tp_id = pos.get("tp_order_id")
+            for aid in (sl_id, tp_id):
+                if aid:
+                    try:
+                        cancel_algo_order(str(aid))
+                    except Exception as exc:
+                        logger.warning("close_position cancel algo %s failed: %s", aid, exc)
+        else:
+            cancel_all_orders(symbol, pos)
     except Exception as exc:
-        logger.error("close_position cancel_all_orders %s %s: %s", side, symbol, exc)
+        logger.error("close_position cancel orders %s %s: %s", side, symbol, exc)
 
     _record_closed_position(pos, exit_rule, actual_close)
     logger.info("close_position done: %s %s source=%s rule=%s close=%.6f",

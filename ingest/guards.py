@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger("ingest.guards")
 
-VALID_SOURCES = {"zct_vwap", "momentum", "jiezhen"}
+VALID_SOURCES = {"zct_vwap", "momentum", "jiezhen", "moss_quant"}
 
 
 @dataclass
@@ -58,6 +58,9 @@ def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
 
 
 def guard_position_exists(sig: Any, ctx: Any) -> GuardDecision:
+    # moss_quant 允许同 symbol 加仓（滚仓场景）
+    if sig.source == "moss_quant":
+        return GuardDecision(skip=False)
     if ctx.db.get_open_position_for_symbol(sig.symbol) is not None:
         return GuardDecision(skip=True, reason="open position for symbol",
                              action="skipped_position_exists")

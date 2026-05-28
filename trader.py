@@ -174,6 +174,14 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     if source in ("momentum", "jiezhen"):
         margin = float(get_source_config(source, "margin_usdt", "100"))
         leverage = int(get_source_config(source, "leverage", "10"))
+    elif source == "moss_quant":
+        notional = float(signal.get("notional_usdt", 0) or 0)
+        leverage = int(get_source_config(source, "leverage", "10"))
+        if notional <= 0:
+            logger.error("moss_quant signal missing notional_usdt %s", symbol)
+            update_signal_status(signal_log_id, "error", "missing notional_usdt")
+            return False
+        margin = notional / leverage
     else:
         try:
             margin = float(get_config("margin_usdt", "100"))
@@ -188,8 +196,8 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
 
     # Validate signal
     try:
-        float(signal["sl_price"]) if signal.get("sl_price") is not None else None
-        float(signal["tp_price"]) if signal.get("tp_price") is not None else None
+        float(signal.get("sl_price")) if signal.get("sl_price") is not None else None
+        float(signal.get("tp_price")) if signal.get("tp_price") is not None else None
     except (TypeError, ValueError) as exc:
         logger.error("signal SL/TP parse failed %s: %s", symbol, exc)
         update_signal_status(signal_log_id, "error", f"bad signal SL/TP: {exc}")

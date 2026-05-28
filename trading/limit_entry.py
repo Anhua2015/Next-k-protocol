@@ -86,7 +86,7 @@ def open_limit(
             signal_log_id=signal_log_id, symbol=symbol, side=side,
             entry_order_id=entry_order_id, entry_price=limit_price,
             sl_price=sl_price, tp_price=tp_price,
-            quantity=qty, notional_usdt=margin, leverage=leverage,
+            quantity=qty, notional_usdt=signal.get("notional_usdt") or margin, leverage=leverage,
             opened_at=_now_utc(), entry_deadline=deadline,
             play=play, source=source,
         )

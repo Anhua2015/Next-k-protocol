@@ -57,6 +57,9 @@ class TestGuardInvalidSource:
     def test_jiezhen_valid(self):
         assert not guard_invalid_source(FakeSignal(source="jiezhen"), None).skip
 
+    def test_moss_quant_valid(self):
+        assert not guard_invalid_source(FakeSignal(source="moss_quant"), None).skip
+
 
 class TestGuardSourceDisabled:
     def test_enabled_passes(self):
@@ -101,6 +104,12 @@ class TestGuardPositionExists:
         ctx.db.get_open_position_for_symbol.return_value = {"id": 1}
         d = guard_position_exists(FakeSignal(), ctx)
         assert d.skip
+
+    def test_moss_quant_bypasses_position_exists(self):
+        ctx = FakeCtx()
+        ctx.db.get_open_position_for_symbol.return_value = {"id": 1}
+        d = guard_position_exists(FakeSignal(source="moss_quant"), ctx)
+        assert not d.skip
 
 
 class TestGuardMaxPositions:

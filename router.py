@@ -34,9 +34,10 @@ from models import (
     SignalIngestResult,
     SignalLogOut,
     StatusOut,
+    UpdateSlRequest,
 )
 
-_VALID_SOURCES = ("zct_vwap", "momentum", "jiezhen")
+_VALID_SOURCES = ("zct_vwap", "momentum", "jiezhen", "moss_quant")
 
 logger = logging.getLogger("router")
 
@@ -267,7 +268,7 @@ async def ingest_signals(body: SignalIngestRequest):
             play_max[pn] = 5
 
     source_max: dict = {}
-    for src in ("momentum", "jiezhen"):
+    for src in ("momentum", "jiezhen", "moss_quant"):
         try:
             source_max[src] = int(_db.get_source_config(src, "max_positions", "5"))
         except ValueError:
@@ -371,6 +372,7 @@ async def close_position(body: ClosePositionRequest):
             side=body.side,
             exit_rule=body.exit_rule,
             close_price=body.close_price,
+            position_id=body.position_id,
         )
         if ok:
             return {"ok": True, "symbol": body.symbol, "action": "closed"}
@@ -381,6 +383,105 @@ async def close_position(body: ClosePositionRequest):
     except Exception as exc:
         logger.error("close_position failed %s %s: %s", body.side, body.symbol, exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.put(
+    "/positions/{position_id}/sl",
+    summary="动态修改止损价（Moss Quant 移动止损）",
+    description="取消当前 SL 条件单，以新价格重新下 STOP_MARKET 条件单并更新持仓记录。需要鉴权。",
+    dependencies=[Depends(require_auth)],
+)
+async def update_position_sl(position_id: int, body: UpdateSlRequest):
+    """动态修改持仓的止损价格。
+
+    处理流程：
+    1. 根据 position_id 找到持仓
+    2. 校验持仓状态为 open 且存在 sl_order_id
+    3. 取消旧 SL 条件单
+    4. 以新 sl_price 重新下 STOP_MARKET 条件单
+    5. 更新 positions 表 sl_price
+
+    请求示例：
+    ```json
+    {
+      "new_sl_price": 91200.0
+    }
+    ```
+    """
+    from binance.exchange_info import round_price
+    from trader import cancel_algo_order, place_algo_order, get_symbol_info
+
+    pos = _db.get_position_by_id(position_id)
+    if not pos:
+        raise HTTPException(status_code=404, detail="position not found")
+    if pos["status"] != "open":
+        raise HTTPException(status_code=400, detail="position not open")
+
+    symbol = pos["symbol"]
+    side = pos["side"]
+    old_sl_id = pos.get("sl_order_id")
+    qty = pos.get("quantity")
+    if not qty:
+        raise HTTPException(status_code=400, detail="position has no quantity")
+    position_side = side if _db.get_config("hedge_mode", "").lower() == "true" else None
+
+    close_side = "SELL" if side == "LONG" else "BUY"
+    new_sl = body.new_sl_price
+    if new_sl <= 0:
+        raise HTTPException(status_code=400, detail="invalid sl_price")
+
+    try:
+        tick_size, _, _ = get_symbol_info(symbol)
+        new_sl = round_price(new_sl, tick_size)
+    except Exception:
+        pass
+
+    # 取消旧 SL
+    if old_sl_id:
+        try:
+            cancel_algo_order(old_sl_id)
+            logger.info("update_sl: cancelled old SL %s for pos=%s", old_sl_id, position_id)
+        except Exception as exc:
+            logger.error("update_sl: cancel old SL %s failed: %s", old_sl_id, exc)
+            raise HTTPException(status_code=502, detail=f"cancel old SL failed: {exc}")
+
+    # 下新 STOP_MARKET 条件单
+    try:
+        prot_params = {
+            "symbol": symbol, "side": close_side, "type": "STOP_MARKET",
+            "stopPrice": new_sl, "quantity": qty, "newOrderRespType": "RESULT",
+            "reduceOnly": "true", "workingType": "MARK_PRICE",
+        }
+        if position_side:
+            prot_params["positionSide"] = position_side
+        new_sl_resp = place_algo_order(prot_params)
+        new_sl_id = str(new_sl_resp.get("algoId", "") or new_sl_resp.get("orderId", ""))
+    except Exception as exc:
+        logger.error("update_sl: place new SL failed pos=%s: %s", position_id, exc)
+        raise HTTPException(status_code=500, detail=f"place new SL failed: {exc}")
+
+    # 更新数据库（下单成功后才写，保证 DB 与交易所一致）
+    try:
+        from repos.connection import get_db
+        with get_db(write=True) as conn:
+            conn.execute(
+                "UPDATE positions SET sl_price=?, sl_order_id=? WHERE id=?",
+                (new_sl, new_sl_id, position_id),
+            )
+    except Exception as exc:
+        logger.error("update_sl: db update failed pos=%s: %s", position_id, exc)
+        raise HTTPException(status_code=500, detail="DB update failed after SL placed")
+
+    logger.info("update_sl: pos=%s symbol=%s old_sl_id=%s new_sl=%.6f new_sl_id=%s",
+                position_id, symbol, old_sl_id, new_sl, new_sl_id)
+    return {
+        "ok": True,
+        "position_id": position_id,
+        "symbol": symbol,
+        "old_sl_order_id": old_sl_id,
+        "new_sl_order_id": new_sl_id,
+        "new_sl_price": new_sl,
+    }
 
 
 @router.get(

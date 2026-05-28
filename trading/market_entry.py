@@ -130,7 +130,7 @@ def open_market(
         signal_log_id=signal_log_id, symbol=symbol, side=side,
         entry_order_id=entry_order_id, sl_order_id=sl_order_id, tp_order_id=tp_order_id,
         entry_price=actual_entry, sl_price=final_sl_p, tp_price=final_tp_p,
-        quantity=qty, notional_usdt=margin, leverage=leverage,
+        quantity=qty, notional_usdt=signal.get("notional_usdt") or margin, leverage=leverage,
         opened_at=_now_utc(), play=play, source=source,
     )
     update_signal_status(signal_log_id, "traded")
