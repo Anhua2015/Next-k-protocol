@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
 *.db
 *.db-journal
@@ -12,3 +13,7 @@ htmlcov/
 .pid/
 logs/
 .env.oi
+.DS_Store
+*.egg-info/
+.idea/
+.vscode/
