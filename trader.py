@@ -106,8 +106,12 @@ def _handle_auth_fail(context: str, pos_id: Any) -> None:
     with _SYNC_AUTH_FAIL_LOCK:
         _SYNC_AUTH_FAIL_COUNT += 1
         count = _SYNC_AUTH_FAIL_COUNT
+    from observability.metrics import AUTH_FAIL
+    AUTH_FAIL.inc()
     if count >= _SYNC_AUTH_FAIL_THRESHOLD:
         set_config("enabled", "false")
+        from observability.metrics import TRADING_DISABLED_AUTO
+        TRADING_DISABLED_AUTO.inc()
         logger.critical(
             "Binance auth failed %d times; DISABLED trading (%s pos=%s)",
             count, context, pos_id,

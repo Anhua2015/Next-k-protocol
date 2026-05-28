@@ -41,4 +41,45 @@ def register_jobs(sch: Any) -> None:
         max_instances=1,
         replace_existing=True,
     )
-    logger.info("Binance jobs registered (sync=30s, reconcile_pending=5s, expire=5min)")
+    sch.add_job(
+        _cleanup_stale_intents,
+        "interval",
+        minutes=5,
+        id="cleanup_intents",
+        max_instances=1,
+        replace_existing=True,
+    )
+    logger.info("Binance jobs registered (sync=30s, reconcile_pending=5s, expire=5min, cleanup_intent=5min)")
+
+
+def _cleanup_stale_intents() -> None:
+    """将超过 60s 的 intent 状态信号标记为 error。
+
+    仅在 INGEST_LOCKLESS_EXECUTE 启用时机有意义（锁外执行时 intent 需要 GC），
+    现作为 future-proofing 占位。
+    """
+    import os as _os
+    if _os.getenv("INGEST_LOCKLESS_EXECUTE", "false").lower() not in (
+        "1", "true", "yes", "on",
+    ):
+        return
+    from binance.time_sync import now_utc
+    from db import update_signal_status
+    import sqlite3
+    from db import DB_PATH
+    cutoff = now_utc()
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id FROM signals_log WHERE status='intent' AND received_at < ?",
+            (cutoff,),
+        ).fetchall()
+        for r in rows:
+            update_signal_status(r["id"], "error", "intent_timeout")
+        if rows:
+            logger.warning("cleanup_intents: marked %d stale intents as error", len(rows))
+    except Exception:
+        pass
+    finally:
+        conn.close()

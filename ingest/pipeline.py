@@ -28,10 +28,12 @@ def process_signal_batch(
     ctx = IngestContext(db=db_module, max_pos=max_pos,
                         play_max=play_max, source_max=source_max)
 
+    from observability.metrics import SIGNALS_RECEIVED
     result = {"scanned": 0, "traded": 0, "skipped": 0, "errors": 0, "details": []}
 
     for sig in signals:
         result["scanned"] += 1
+        SIGNALS_RECEIVED.labels(source=sig.source, play=sig.play or "").inc()
         detail = _process_one(sig, ctx)
         action = detail.get("action", "error")
         if action == "traded":
@@ -59,6 +61,8 @@ def _process_one(sig, ctx: IngestContext) -> Dict[str, Any]:
 
     # 交易总开关
     if ctx.db.get_config("enabled", "false").lower() != "true":
+        from observability.metrics import SIGNALS_SKIPPED
+        SIGNALS_SKIPPED.labels(source=sig.source, code="disabled").inc()
         detail["action"] = "skipped_disabled"
         return detail
 
@@ -74,6 +78,8 @@ def _process_one(sig, ctx: IngestContext) -> Dict[str, Any]:
             reason = decision.reason
             if signal_log_id and action:
                 ctx.db.update_signal_status(signal_log_id, action, reason)
+            from observability.metrics import SIGNALS_SKIPPED
+            SIGNALS_SKIPPED.labels(source=sig.source, code=action).inc()
             detail["action"] = action
             return detail
 
