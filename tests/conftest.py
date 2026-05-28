@@ -69,7 +69,8 @@ def seeded_config(fresh_db):
     # Init/reset the binance HTTP client (Phase 1 lazy singleton)
     import sys
     import binance.account as _bacct
-    sys.modules.pop("trader", None)
+    # NOTE: no longer pop "trader" from sys.modules — trader is now a facade
+    # with no module-level DB state. The lazy client resolves fresh each time.
     from binance.client import init_client
     from db import get_config as _cfg
     init_client(
