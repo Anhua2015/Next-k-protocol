@@ -46,7 +46,10 @@ class BinanceClient:
         self._base_url_fn = base_url_fn
         self._api_key_fn = api_key_fn
         self._secret_fn = secret_fn
-        self._http = httpx.Client(timeout=timeout)
+        self._http = httpx.Client(
+            timeout=httpx.Timeout(connect=3, read=timeout, write=10, pool=2),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
         self._http_sync = httpx.Client(timeout=5.0)
 
     # -- Low-level helpers ------------------------------------------------

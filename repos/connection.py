@@ -46,6 +46,16 @@ _ENV_TO_CONFIG: Dict[str, str] = {
     "BINANCE_TESTNET": "testnet",
 }
 
+_PERF_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_signals_log_dedup ON signals_log(source, api_signal_id)",
+    "CREATE INDEX IF NOT EXISTS idx_signals_log_status ON signals_log(status)",
+    "CREATE INDEX IF NOT EXISTS idx_positions_status_symbol ON positions(status, symbol)",
+    "CREATE INDEX IF NOT EXISTS idx_positions_status_play ON positions(status, play)",
+    "CREATE INDEX IF NOT EXISTS idx_positions_status_source ON positions(status, source)",
+    "CREATE INDEX IF NOT EXISTS idx_positions_expire_at ON positions(status, expire_at)",
+    "CREATE INDEX IF NOT EXISTS idx_positions_closed_at ON positions(closed_at)",
+]
+
 DDL = """
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
@@ -144,3 +154,9 @@ def init_db() -> None:
             conn.execute(
                 "INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)", (k, v)
             )
+        # Performance indexes (Phase 8)
+        for idx_sql in _PERF_INDEXES:
+            try:
+                conn.execute(idx_sql)
+            except Exception:
+                pass
