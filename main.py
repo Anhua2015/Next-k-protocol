@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -28,11 +27,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from env_loader import load_env_oi
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+from observability.logging_setup import configure_logging
+configure_logging()
 logger = logging.getLogger(__name__)
 
 load_env_oi()
@@ -130,6 +126,9 @@ app.add_middleware(
 
 from router import router
 app.include_router(router)
+
+from routers.metrics import router as metrics_router
+app.include_router(metrics_router)
 
 logger.info("Routes registered: /api/binance/*")
 logger.info("Swagger docs: http://0.0.0.0:%d/docs", PORT)
