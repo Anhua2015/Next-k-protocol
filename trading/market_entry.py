@@ -134,6 +134,8 @@ def open_market(
         opened_at=_now_utc(), play=play, source=source,
     )
     update_signal_status(signal_log_id, "traded")
+    from observability.metrics import TRADES_OPENED
+    TRADES_OPENED.labels(source=source, side=side, entry_type="MARKET").inc()
     logger.info("Opened %s %s source=%s qty=%s entry=%.6f sl=%.6f tp=%.6f",
                 side, symbol, source, qty, actual_entry, final_sl_p, final_tp_p)
     return MarketEntryResult(ok=True, qty=qty, entry_price=actual_entry,

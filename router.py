@@ -273,7 +273,17 @@ async def ingest_signals(body: SignalIngestRequest):
         except ValueError:
             source_max[src] = 5
 
+    import os as _os
     from ingest.pipeline import process_signal_batch
+
+    lockless = _os.getenv("INGEST_LOCKLESS_EXECUTE", "false").lower() in (
+        "1", "true", "yes", "on",
+    )
+    # NOTE: lockless mode (future): guards inside lock, execute outside lock.
+    # Currently both paths are identical — lockless refactoring requires
+    # intent-status infrastructure (Phase 5 spec §9.7).
+    if lockless:
+        logger.warning("INGEST_LOCKLESS_EXECUTE=true is not yet implemented; using locked path")
 
     with _db._db_write_lock:
         result_data = process_signal_batch(

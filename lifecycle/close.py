@@ -47,6 +47,9 @@ def _record_closed_position(
         update_signal_status(signal_log_id, "closed", close_reason)
     logger.info("Closed %s %s reason=%s close=%.6f pnl=%.4f pct=%.2f%%",
                 side, pos.get("symbol"), close_reason, close_price, pnl, pnl_pct)
+    from observability.metrics import POSITIONS_CLOSED
+    POSITIONS_CLOSED.labels(
+        source=pos.get("source", ""), close_reason=close_reason).inc()
 
 
 def close_position(

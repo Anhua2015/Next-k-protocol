@@ -91,6 +91,8 @@ def open_limit(
             play=play, source=source,
         )
         update_signal_status(signal_log_id, "pending_entry")
+        from observability.metrics import TRADES_OPENED
+        TRADES_OPENED.labels(source=source, side=side, entry_type="LIMIT").inc()
         logger.info("LIMIT placed: %s %s qty=%s price=%.6f order=%s",
                     side, symbol, qty, limit_price, entry_order_id)
         return LimitEntryResult(ok=True)
