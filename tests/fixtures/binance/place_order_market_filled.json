@@ -1,0 +1,10 @@
+{
+  "orderId": 11111111,
+  "symbol": "BTCUSDT",
+  "status": "FILLED",
+  "executedQty": "0.012",
+  "avgPrice": "67250.50",
+  "cumQuote": "807.006",
+  "type": "MARKET",
+  "side": "BUY"
+}

@@ -23,6 +23,8 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 import db as _db
 from auth import require_auth
+from trader import close_position as do_close
+from trader import execute_trade
 from models import (
     ClosePositionRequest,
     ConfigUpdate,
@@ -32,9 +34,10 @@ from models import (
     SignalIngestResult,
     SignalLogOut,
     StatusOut,
+    UpdateSlRequest,
 )
 
-_VALID_SOURCES = ("zct_vwap", "momentum", "jiezhen")
+_VALID_SOURCES = ("zct_vwap", "momentum", "jiezhen", "moss_quant")
 
 logger = logging.getLogger("router")
 
@@ -69,10 +72,20 @@ async def health():
     - 负载均衡器的存活探针
     - 前端连接测试
     """
+    db_ok = True
+    try:
+        with _db.get_db() as conn:
+            conn.execute("SELECT 1").fetchone()
+    except Exception as exc:
+        db_ok = False
+        logger.warning("health check: DB probe failed: %s", exc)
+
+    status = "ok" if db_ok else "degraded"
     return {
-        "status": "ok",
+        "status": status,
         "module": "next-k-protocol",
         "version": "1.0.0",
+        "db": "ok" if db_ok else "fail",
     }
 
 
@@ -240,183 +253,45 @@ async def ingest_signals(body: SignalIngestRequest):
     }
     ```
     """
-    result: dict = {"scanned": 0, "traded": 0, "skipped": 0, "errors": 0, "details": []}
-
-    if _db.get_config("enabled", "false").lower() != "true":
-        logger.info("ingest: trading disabled, skipped=%d", len(body.signals))
-        for sig in body.signals:
-            result["scanned"] += 1
-            result["skipped"] += 1
-            result["details"].append({"api_signal_id": sig.api_signal_id, "symbol": sig.symbol, "source": sig.source, "action": "skipped_disabled"})
-        return SignalIngestResult(**result)
-
+    # Phase 5: delegate to ingest/ pipeline.
+    # Build ctx config once, then process batch.
     try:
         max_pos = int(_db.get_config("max_positions", "8"))
     except ValueError:
         max_pos = 8
 
-    _play_max = {}
-    for _pn in ("play01", "play02", "play03"):
+    play_max: dict = {}
+    for pn in ("play01", "play02", "play03"):
         try:
-            _play_max[_pn] = int(_db.get_config(f"max_positions_{_pn}", "5"))
+            play_max[pn] = int(_db.get_config(f"max_positions_{pn}", "5"))
         except ValueError:
-            _play_max[_pn] = 5
+            play_max[pn] = 5
 
-    def _play_max_for(p: str) -> int:
-        if not p:
-            return max_pos
-        pu = p.strip().upper()
-        for _k in ("PLAY01", "PLAY02", "PLAY03"):
-            if pu.startswith(_k):
-                return _play_max.get(_k.lower(), 5)
-        return max_pos
-
-    def _source_max_positions(source: str) -> int:
+    source_max: dict = {}
+    for src in ("momentum", "jiezhen", "moss_quant"):
         try:
-            return int(_db.get_source_config(source, "max_positions", "5"))
+            source_max[src] = int(_db.get_source_config(src, "max_positions", "5"))
         except ValueError:
-            return 5
+            source_max[src] = 5
 
-    result["scanned"] = len(body.signals)
+    import os as _os
+    from ingest.pipeline import process_signal_batch
 
-    for sig in body.signals:
-        symbol = sig.symbol
-        side = sig.side
-        source = sig.source
-        play = sig.play or ""
+    lockless = _os.getenv("INGEST_LOCKLESS_EXECUTE", "false").lower() in (
+        "1", "true", "yes", "on",
+    )
+    # NOTE: lockless mode (future): guards inside lock, execute outside lock.
+    # Currently both paths are identical — lockless refactoring requires
+    # intent-status infrastructure (Phase 5 spec §9.7).
+    if lockless:
+        logger.warning("INGEST_LOCKLESS_EXECUTE=true is not yet implemented; using locked path")
 
-        detail: dict = {
-            "api_signal_id": sig.api_signal_id, "symbol": symbol,
-            "side": side, "source": source,
-        }
-
-        logger.info(
-            "ingest signal: source=%s id=%s symbol=%s side=%s play=%s entry=%s sl=%s tp=%s confidence=%s regime=%s notional=%s",
-            source, sig.api_signal_id, symbol, side, play,
-            sig.entry_price, sig.sl_price, sig.tp_price,
-            sig.confidence, sig.regime, sig.notional_usdt,
+    with _db._db_write_lock:
+        result_data = process_signal_batch(
+            body.signals, _db, max_pos, play_max, source_max,
         )
 
-        with _db._db_write_lock:
-            # 先入库（所有信号均记录到 signals_log）
-            signal_log_id = _db.insert_signal(
-                source=source,
-                api_signal_id=sig.api_signal_id,
-                symbol=symbol,
-                side=side,
-                entry_price=sig.entry_price,
-                sl_price=sig.sl_price,
-                tp_price=sig.tp_price,
-                confidence=sig.confidence,
-                regime=sig.regime,
-                notional_usdt=sig.notional_usdt,
-                received_at=_now_utc(),
-                play=play,
-            )
-            if signal_log_id is None:
-                logger.info("ingest skip %s %s: duplicate (source=%s id=%s)", side, symbol, source, sig.api_signal_id)
-                detail["action"] = "duplicate"
-                result["skipped"] += 1
-                result["details"].append(detail)
-                continue
-
-            # 信号来源验证
-            if source not in _VALID_SOURCES:
-                skip_reason = f"invalid source={source}"
-                _db.update_signal_status(signal_log_id, "skipped_invalid_source", skip_reason)
-                logger.warning("ingest skip %s %s: %s", side, symbol, skip_reason)
-                detail["action"] = "skipped_invalid_source"
-                result["skipped"] += 1
-                result["details"].append(detail)
-                continue
-
-            # 策略开关检查
-            if not _db.source_enabled(source):
-                skip_reason = f"source={source} disabled"
-                _db.update_signal_status(signal_log_id, "skipped_source_disabled", skip_reason)
-                logger.info("ingest skip %s %s: %s", side, symbol, skip_reason)
-                detail["action"] = "skipped_source_disabled"
-                result["skipped"] += 1
-                result["details"].append(detail)
-                continue
-
-            # 同币种持仓冲突
-            if _db.get_open_position_for_symbol(symbol) is not None:
-                _db.update_signal_status(signal_log_id, "skipped_position_exists", "open position for symbol")
-                logger.info("ingest skip %s %s: position already open", side, symbol)
-                detail["action"] = "skipped_position_exists"
-                result["skipped"] += 1
-                result["details"].append(detail)
-                continue
-
-            # 策略仓位上限检查
-            if source == "zct_vwap":
-                play_max = _play_max_for(play)
-                play_open = _db.count_open_by_play(play)
-                if play_open >= play_max:
-                    skip_reason = f"play={play} max={play_max} open={play_open}"
-                    _db.update_signal_status(signal_log_id, "skipped_max_positions", skip_reason)
-                    logger.info("ingest skip %s %s: %s", side, symbol, skip_reason)
-                    detail["action"] = "skipped_max_positions"
-                    result["skipped"] += 1
-                    result["details"].append(detail)
-                    continue
-            else:
-                src_max = _source_max_positions(source)
-                src_open = _db.count_open_by_source(source)
-                if src_open >= src_max:
-                    skip_reason = f"source={source} max={src_max} open={src_open}"
-                    _db.update_signal_status(signal_log_id, "skipped_max_positions", skip_reason)
-                    logger.info("ingest skip %s %s: %s", side, symbol, skip_reason)
-                    detail["action"] = "skipped_max_positions"
-                    result["skipped"] += 1
-                    result["details"].append(detail)
-                    continue
-
-            # 全局仓位上限
-            open_count = _db.count_open_total()
-            if open_count >= max_pos:
-                skip_reason = f"global max={max_pos} open={open_count}"
-                _db.update_signal_status(signal_log_id, "skipped_max_positions", skip_reason)
-                logger.info("ingest skip %s %s: %s", side, symbol, skip_reason)
-                detail["action"] = "skipped_max_positions"
-                result["skipped"] += 1
-                result["details"].append(detail)
-                continue
-
-        from trader import execute_trade
-
-        try:
-            ok = execute_trade({
-                "signal_log_id": signal_log_id,
-                "symbol": symbol,
-                "side": side,
-                "source": source,
-                "sl_price": float(sig.sl_price) if sig.sl_price is not None else None,
-                "tp_price": float(sig.tp_price) if sig.tp_price is not None else None,
-                "notional_usdt": sig.notional_usdt,
-                "play": play,
-            })
-            detail["action"] = "traded" if ok else "error"
-            if ok:
-                result["traded"] += 1
-            else:
-                result["errors"] += 1
-        except Exception as exc:
-            logger.error("ingest execute_trade %s %s: %s", side, symbol, exc)
-            _db.update_signal_status(signal_log_id, "error", str(exc))
-            detail["action"] = "error"
-            detail["error"] = str(exc)
-            result["errors"] += 1
-
-        result["details"].append(detail)
-
-    if result["scanned"]:
-        logger.info(
-            "ingest complete: scanned=%d traded=%d skipped=%d errors=%d",
-            result["scanned"], result["traded"], result["skipped"], result["errors"],
-        )
-    return SignalIngestResult(**result)
+    return result_data
 
 
 # ---------------------------------------------------------------------------
@@ -485,8 +360,6 @@ async def close_position(body: ClosePositionRequest):
     }
     ```
     """
-    from trader import close_position as do_close
-
     logger.info(
         "close_position request: source=%s symbol=%s side=%s exit_rule=%s close_price=%s signal_id=%s",
         body.source, body.symbol, body.side, body.exit_rule, body.close_price, body.api_signal_id,
@@ -499,6 +372,7 @@ async def close_position(body: ClosePositionRequest):
             side=body.side,
             exit_rule=body.exit_rule,
             close_price=body.close_price,
+            position_id=body.position_id,
         )
         if ok:
             return {"ok": True, "symbol": body.symbol, "action": "closed"}
@@ -509,6 +383,105 @@ async def close_position(body: ClosePositionRequest):
     except Exception as exc:
         logger.error("close_position failed %s %s: %s", body.side, body.symbol, exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.put(
+    "/positions/{position_id}/sl",
+    summary="动态修改止损价（Moss Quant 移动止损）",
+    description="取消当前 SL 条件单，以新价格重新下 STOP_MARKET 条件单并更新持仓记录。需要鉴权。",
+    dependencies=[Depends(require_auth)],
+)
+async def update_position_sl(position_id: int, body: UpdateSlRequest):
+    """动态修改持仓的止损价格。
+
+    处理流程：
+    1. 根据 position_id 找到持仓
+    2. 校验持仓状态为 open 且存在 sl_order_id
+    3. 取消旧 SL 条件单
+    4. 以新 sl_price 重新下 STOP_MARKET 条件单
+    5. 更新 positions 表 sl_price
+
+    请求示例：
+    ```json
+    {
+      "new_sl_price": 91200.0
+    }
+    ```
+    """
+    from binance.exchange_info import round_price
+    from trader import cancel_algo_order, place_algo_order, get_symbol_info
+
+    pos = _db.get_position_by_id(position_id)
+    if not pos:
+        raise HTTPException(status_code=404, detail="position not found")
+    if pos["status"] != "open":
+        raise HTTPException(status_code=400, detail="position not open")
+
+    symbol = pos["symbol"]
+    side = pos["side"]
+    old_sl_id = pos.get("sl_order_id")
+    qty = pos.get("quantity")
+    if not qty:
+        raise HTTPException(status_code=400, detail="position has no quantity")
+    position_side = side if _db.get_config("hedge_mode", "").lower() == "true" else None
+
+    close_side = "SELL" if side == "LONG" else "BUY"
+    new_sl = body.new_sl_price
+    if new_sl <= 0:
+        raise HTTPException(status_code=400, detail="invalid sl_price")
+
+    try:
+        tick_size, _, _ = get_symbol_info(symbol)
+        new_sl = round_price(new_sl, tick_size)
+    except Exception:
+        pass
+
+    # 取消旧 SL
+    if old_sl_id:
+        try:
+            cancel_algo_order(old_sl_id)
+            logger.info("update_sl: cancelled old SL %s for pos=%s", old_sl_id, position_id)
+        except Exception as exc:
+            logger.error("update_sl: cancel old SL %s failed: %s", old_sl_id, exc)
+            raise HTTPException(status_code=502, detail=f"cancel old SL failed: {exc}")
+
+    # 下新 STOP_MARKET 条件单
+    try:
+        prot_params = {
+            "symbol": symbol, "side": close_side, "type": "STOP_MARKET",
+            "stopPrice": new_sl, "quantity": qty, "newOrderRespType": "RESULT",
+            "reduceOnly": "true", "workingType": "MARK_PRICE",
+        }
+        if position_side:
+            prot_params["positionSide"] = position_side
+        new_sl_resp = place_algo_order(prot_params)
+        new_sl_id = str(new_sl_resp.get("algoId", "") or new_sl_resp.get("orderId", ""))
+    except Exception as exc:
+        logger.error("update_sl: place new SL failed pos=%s: %s", position_id, exc)
+        raise HTTPException(status_code=500, detail=f"place new SL failed: {exc}")
+
+    # 更新数据库（下单成功后才写，保证 DB 与交易所一致）
+    try:
+        from repos.connection import get_db
+        with get_db(write=True) as conn:
+            conn.execute(
+                "UPDATE positions SET sl_price=?, sl_order_id=? WHERE id=?",
+                (new_sl, new_sl_id, position_id),
+            )
+    except Exception as exc:
+        logger.error("update_sl: db update failed pos=%s: %s", position_id, exc)
+        raise HTTPException(status_code=500, detail="DB update failed after SL placed")
+
+    logger.info("update_sl: pos=%s symbol=%s old_sl_id=%s new_sl=%.6f new_sl_id=%s",
+                position_id, symbol, old_sl_id, new_sl, new_sl_id)
+    return {
+        "ok": True,
+        "position_id": position_id,
+        "symbol": symbol,
+        "old_sl_order_id": old_sl_id,
+        "new_sl_order_id": new_sl_id,
+        "new_sl_price": new_sl,
+    }
 
 
 @router.get(
@@ -542,8 +515,8 @@ async def list_positions(
       - 'unknown'：未知原因
     - **expire_at**：持仓过期时间（UTC），到期后由 scheduler 自动强平
     """
-    if status and status not in ("open", "closed"):
-        raise HTTPException(status_code=400, detail="status must be 'open' or 'closed'")
+    if status and status not in ("open", "closed", "pending_entry", "cancelled_pending"):
+        raise HTTPException(status_code=400, detail="status must be 'open' | 'closed' | 'pending_entry' | 'cancelled_pending'")
     rows = _db.list_positions(status=status, limit=limit, offset=offset)
     return rows
 

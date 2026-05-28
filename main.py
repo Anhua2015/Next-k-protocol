@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -28,11 +27,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from env_loader import load_env_oi
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+from observability.logging_setup import configure_logging
+configure_logging()
 logger = logging.getLogger(__name__)
 
 load_env_oi()
@@ -42,6 +38,27 @@ EMBED_SCHEDULER = os.getenv("EMBED_SCHEDULER", "1").strip().lower() in (
     "1", "true", "yes", "on",
 )
 
+# CORS 白名单：通过 PROTOCOL_CORS_ORIGINS 环境变量配置（逗号分隔）。
+# 默认仅允许本地（开发）；生产环境必须配置实际前端域名，例如：
+#   PROTOCOL_CORS_ORIGINS=https://app.example.com,https://staging.example.com
+def _parse_cors_origins() -> list[str]:
+    raw = os.getenv("PROTOCOL_CORS_ORIGINS", "").strip()
+    if not raw:
+        return [
+            "http://localhost",
+            "http://localhost:8000",
+            "http://localhost:8001",
+            "http://127.0.0.1",
+            "http://127.0.0.1:8000",
+            "http://127.0.0.1:8001",
+            "http://localhost:5173",
+            "http://localhost:5500",
+        ]
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+CORS_ORIGINS = _parse_cors_origins()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -50,6 +67,20 @@ async def lifespan(app: FastAPI):
     import db
     db.init_db()
     logger.info("Database initialized: %s", str(db.DB_PATH))
+
+    # Initialize Binance HTTP client (Phase 1)
+    from binance.client import init_client
+    from db import get_config
+    init_client(
+        base_url_fn=lambda: (
+            "https://testnet.binancefuture.com"
+            if get_config("testnet", "false").lower() == "true"
+            else "https://fapi.binance.com"
+        ),
+        api_key_fn=lambda: get_config("binance_api_key", ""),
+        secret_fn=lambda: get_config("binance_api_secret", ""),
+    )
+    logger.info("Binance HTTP client initialized")
 
     if EMBED_SCHEDULER:
         import pytz
@@ -67,7 +98,9 @@ async def lifespan(app: FastAPI):
 
     sch = getattr(app.state, "scheduler", None)
     if sch is not None:
-        sch.shutdown(wait=False)
+        # wait=True 让 scheduler 等正在运行的 job 跑完再退出，避免 promote_pending_to_open
+        # 等关键写操作中途被杀导致 DB 状态不一致。job 都不长（最多几秒），可接受。
+        sch.shutdown(wait=True)
         app.state.scheduler = None
     logger.info("Next K Protocol shutting down")
 
@@ -83,14 +116,19 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
+    # 临时放开到 * 以便线上前端能跨域访问；建议尽快配 PROTOCOL_CORS_ORIGINS
+    # 环境变量后改回白名单（参考 _parse_cors_origins 注释）。
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["X-Maintenance-Token", "Authorization", "Content-Type"],
 )
 
 from router import router
 app.include_router(router)
+
+from routers.metrics import router as metrics_router
+app.include_router(metrics_router)
 
 logger.info("Routes registered: /api/binance/*")
 logger.info("Swagger docs: http://0.0.0.0:%d/docs", PORT)
