@@ -150,9 +150,13 @@ def _place_protective(s, cs, sp, q, ps, ts, k):
     return place_algo_order(_build_protective(s, cs, sp, q, ps, k))
 
 
-# -- execute_trade (stays here until Phase 4) --------------------------------
+# -- execute_trade (Phase 4: orchestrator, delegates to trading/) ------------
 
 def execute_trade(signal: Dict[str, Any]) -> bool:
+    """开仓调度：读配置→设杠杆/保证金→dispatch MARKET/LIMIT。"""
+    from trading.market_entry import open_market
+    from trading.limit_entry import open_limit
+
     signal_log_id = signal["signal_log_id"]
     symbol = signal["symbol"]
     side = signal["side"]
@@ -162,6 +166,7 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     logger.info("execute_trade: source=%s symbol=%s side=%s play=%s id=%s",
                 source, symbol, side, play, signal_log_id)
 
+    # Resolve margin/leverage
     if source in ("momentum", "jiezhen"):
         margin = float(get_source_config(source, "margin_usdt", "100"))
         leverage = int(get_source_config(source, "leverage", "10"))
@@ -177,9 +182,10 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     logger.info("execute_trade %s: source=%s margin=%.0f leverage=%d",
                 symbol, source, margin, leverage)
 
+    # Validate signal
     try:
-        sl_price = float(signal["sl_price"]) if signal.get("sl_price") is not None else None
-        tp_price = float(signal["tp_price"]) if signal.get("tp_price") is not None else None
+        float(signal["sl_price"]) if signal.get("sl_price") is not None else None
+        float(signal["tp_price"]) if signal.get("tp_price") is not None else None
     except (TypeError, ValueError) as exc:
         logger.error("signal SL/TP parse failed %s: %s", symbol, exc)
         update_signal_status(signal_log_id, "error", f"bad signal SL/TP: {exc}")
@@ -198,151 +204,31 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
         source, "entry_type", get_config("entry_type", "MARKET"),
     ).upper()
 
-    qty: float = 0.0
-    actual_entry: float = 0.0
-    position_side: Optional[str] = None
-    entry_order_id = ""
-
+    # Setup: filters + leverage + margin type + hedge mode
     try:
         step_size, tick_size, min_notional = _get_filters(symbol)
         set_margin_type(symbol)
         set_leverage(symbol, leverage)
-
         hedge = _detect_hedge_mode()
-        if hedge:
-            position_side = "LONG" if side == "LONG" else "SHORT"
-
         mark_px = get_mark_price(symbol)
-        order_side = "BUY" if side == "LONG" else "SELL"
-        close_side = "SELL" if side == "LONG" else "BUY"
-
-        if entry_type == "LIMIT":
-            signal_entry = signal.get("entry_price")
-            if signal_entry is None or float(signal_entry) <= 0:
-                logger.error("LIMIT entry %s %s: missing entry_price", side, symbol)
-                update_signal_status(signal_log_id, "error", "limit needs entry_price")
-                return False
-            limit_price_raw = float(signal_entry)
-            limit_price = _round_price(limit_price_raw, tick_size)
-            raw_qty = margin * leverage / limit_price
-            qty = _round_quantity(raw_qty, step_size)
-            if qty <= 0:
-                raise ValueError(f"computed qty={qty}")
-            if qty * limit_price < min_notional:
-                raise ValueError(f"notional {qty * limit_price:.2f} < min {min_notional}")
-
-            entry_params: Dict[str, Any] = {
-                "symbol": symbol, "side": order_side, "type": "LIMIT",
-                "timeInForce": "GTC", "quantity": qty, "price": limit_price,
-                "newOrderRespType": "ACK",
-            }
-            if position_side:
-                entry_params["positionSide"] = position_side
-            entry_resp = place_order(entry_params)
-            entry_order_id = str(entry_resp.get("orderId", ""))
-            if not entry_order_id:
-                raise ValueError(f"LIMIT response missing orderId: {entry_resp}")
-
-            timeout_sec = float(get_source_config(
-                source, "limit_entry_timeout_sec",
-                get_config("limit_entry_timeout_sec", "30"),
-            ))
-            deadline = compute_pending_deadline(timeout_sec)
-            insert_pending_position(
-                signal_log_id=signal_log_id, symbol=symbol, side=side,
-                entry_order_id=entry_order_id, entry_price=limit_price,
-                sl_price=sl_price, tp_price=tp_price,
-                quantity=qty, notional_usdt=margin, leverage=leverage,
-                opened_at=_now_utc(), entry_deadline=deadline,
-                play=play, source=source,
-            )
-            update_signal_status(signal_log_id, "pending_entry")
-            logger.info("LIMIT placed: %s %s qty=%s price=%.6f order=%s",
-                        side, symbol, qty, limit_price, entry_order_id)
-            return True
-
-        # MARKET
-        raw_qty = margin * leverage / mark_px
-        qty = _round_quantity(raw_qty, step_size)
-        if qty <= 0:
-            raise ValueError(f"computed qty={qty}")
-        if qty * mark_px < min_notional:
-            raise ValueError(f"notional {qty * mark_px:.2f} < min {min_notional}")
-
-        entry_params = {
-            "symbol": symbol, "side": order_side, "type": "MARKET",
-            "quantity": qty, "newOrderRespType": "RESULT",
-        }
-        if position_side:
-            entry_params["positionSide"] = position_side
-        entry_resp = place_order(entry_params)
-        entry_order_id = str(entry_resp.get("orderId", ""))
-        actual_entry = float(entry_resp.get("avgPrice") or 0)
-        if actual_entry <= 0 and entry_order_id:
-            try:
-                detail = get_order(symbol, entry_order_id)
-                actual_entry = float(detail.get("avgPrice") or 0)
-            except Exception as exc:
-                logger.warning("get_order after entry %s: %s", symbol, exc)
-        if actual_entry <= 0:
-            actual_entry = mark_px
-            logger.warning("entry avgPrice missing for %s; using mark=%.6f",
-                           symbol, mark_px)
-
-        logger.info("entry filled: %s %s qty=%s entry=%.6f order=%s",
-                    side, symbol, qty, actual_entry, entry_order_id)
     except Exception as exc:
-        logger.error("entry %s %s failed: %s", side, symbol, exc)
-        update_signal_status(signal_log_id, "error", f"entry: {exc}")
+        logger.error("setup failed %s %s: %s", side, symbol, exc)
+        update_signal_status(signal_log_id, "error", f"setup: {exc}")
         return False
 
-    final_sl_p = _round_price(sl_price, tick_size) if sl_price else None
-    final_tp_p = _round_price(tp_price, tick_size) if tp_price else None
-    logger.info("signal SL/TP: %s %s source=%s entry=%.6f sl=%s tp=%s",
-                side, symbol, source, actual_entry, final_sl_p, final_tp_p)
-
-    if final_sl_p is not None:
-        try:
-            _validate_sl_distance(side, final_sl_p, mark_px, tick_size)
-        except ValueError as exc:
-            logger.warning("SL validation failed %s: %s", symbol, exc)
-
-    sl_order_id = ""
-    tp_order_id = ""
-    try:
-        if final_sl_p is not None:
-            sl_resp = _place_protective(
-                symbol, close_side, final_sl_p, qty, position_side, tick_size, "SL")
-            sl_order_id = str(sl_resp.get("algoId", "") or sl_resp.get("orderId", ""))
-            logger.info("SL placed: %s %s sl=%.6f algoId=%s",
-                        side, symbol, final_sl_p, sl_order_id)
-        if final_tp_p is not None:
-            tp_resp = _place_protective(
-                symbol, close_side, final_tp_p, qty, position_side, tick_size, "TP")
-            tp_order_id = str(tp_resp.get("algoId", "") or tp_resp.get("orderId", ""))
-            logger.info("TP placed: %s %s tp=%.6f algoId=%s",
-                        side, symbol, final_tp_p, tp_order_id)
-    except Exception as exc:
-        logger.error("SL/TP placement failed %s %s: %s", side, symbol, exc)
-        try:
-            cancel_all_orders(symbol)
-        except Exception:
-            pass
-        _emergency_close(symbol, side, qty, position_side)
-        update_signal_status(signal_log_id, "error", f"SL/TP failed: {exc}")
-        return False
-
-    insert_position(
-        signal_log_id=signal_log_id, symbol=symbol, side=side,
-        entry_order_id=entry_order_id, sl_order_id=sl_order_id, tp_order_id=tp_order_id,
-        entry_price=actual_entry, sl_price=final_sl_p, tp_price=final_tp_p,
-        quantity=qty, notional_usdt=margin, leverage=leverage,
-        opened_at=_now_utc(), play=play, source=source,
-    )
-    update_signal_status(signal_log_id, "traded")
-    logger.info("Opened %s %s source=%s qty=%s entry=%.6f sl=%.6f tp=%.6f",
-                side, symbol, source, qty, actual_entry, final_sl_p, final_tp_p)
-    return True
+    # Dispatch
+    if entry_type == "LIMIT":
+        result = open_limit(
+            signal, symbol, side, margin, leverage,
+            step_size, tick_size, min_notional, hedge, source, play,
+        )
+        return result.ok
+    else:
+        result = open_market(
+            signal, symbol, side, margin, leverage,
+            step_size, tick_size, min_notional, hedge, mark_px, source, play,
+        )
+        return result.ok
 
 
 # -- Lifecycle re-exports (Phase 3) ------------------------------------------
