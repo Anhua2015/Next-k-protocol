@@ -36,9 +36,11 @@ def fresh_db(tmp_path, monkeypatch):
     import importlib
     import sys
 
-    # Force reload so DB_PATH picks up new DATA_DIR
-    if "db" in sys.modules:
-        del sys.modules["db"]
+    # Clear all modules that cache DB_PATH or db function references
+    for _mod in list(sys.modules):
+        if _mod.startswith("repos.") or _mod == "db":
+            del sys.modules[_mod]
+
     import db as db_module
     importlib.reload(db_module)
     db_module.init_db()
@@ -73,8 +75,12 @@ def seeded_config(fresh_db):
     for _mod in ("ingest.pipeline", "ingest.guards", "ingest.dispatcher",
                  "trading.market_entry", "trading.limit_entry",
                  "lifecycle.close", "lifecycle.sync", "lifecycle.reconcile",
-                 "lifecycle.expire"):
+                 "lifecycle.expire",
+                 "repos.connection", "repos.config_repo", "repos.signals_repo",
+                 "repos.positions_repo", "repos.pnl_repo"):
         sys.modules.pop(_mod, None)
+    # Also clear db facade so it re-imports from repos
+    sys.modules.pop("db", None)
     from binance.client import init_client
     from db import get_config as _cfg
     init_client(
