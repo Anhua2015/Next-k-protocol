@@ -35,5 +35,6 @@ def test_account_summary_route_returns_usdt_and_moss_config(seeded_config, monke
     body = resp.json()
     assert body["wallet_balance_usdt"] == 1000.5
     assert body["available_balance_usdt"] == 800.25
+    assert body["unrealized_pnl_usdt"] == 12.5
     assert body["moss_quant"]["leverage"] == 7
     assert body["moss_quant"]["enabled"] is True
