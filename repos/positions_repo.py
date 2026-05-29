@@ -27,6 +27,8 @@ def insert_position(
     opened_at: str,
     play: Optional[str] = None,
     source: str = "",
+    profile_id: Optional[int] = None,
+    client_ref: str = "",
 ) -> int:
     expire_hours = _resolve_expire_hours(play, source=source)
     expire_at = _compute_expire_at(expire_hours)
@@ -35,12 +37,14 @@ def insert_position(
             """INSERT INTO positions
                (signal_log_id, symbol, side, entry_order_id, sl_order_id,
                 tp_order_id, entry_price, sl_price, tp_price, quantity,
-                notional_usdt, leverage, opened_at, expire_at, status, play, source)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'open',?,?)""",
+                notional_usdt, leverage, opened_at, expire_at, status, play, source,
+                profile_id, client_ref)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'open',?,?,?,?)""",
             (
                 signal_log_id, symbol, side, entry_order_id, sl_order_id,
                 tp_order_id, entry_price, sl_price, tp_price, quantity,
                 notional_usdt, leverage, opened_at, expire_at, play, source,
+                profile_id, client_ref or "",
             ),
         )
         return cur.lastrowid
@@ -61,19 +65,32 @@ def update_position_closed(
 
 
 def list_positions(
-    status: Optional[str] = None, limit: int = 100, offset: int = 0,
+    status: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    source: Optional[str] = None,
+    profile_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
+    clauses = []
+    params: List[Any] = []
+    if status:
+        clauses.append("status=?")
+        params.append(status)
+    if source:
+        clauses.append("source=?")
+        params.append(source)
+    if profile_id is not None:
+        clauses.append("profile_id=?")
+        params.append(profile_id)
+
+    sql = "SELECT * FROM positions"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+
     with get_db() as conn:
-        if status:
-            rows = conn.execute(
-                "SELECT * FROM positions WHERE status=? ORDER BY id DESC LIMIT ? OFFSET ?",
-                (status, limit, offset),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM positions ORDER BY id DESC LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -128,6 +145,8 @@ def insert_pending_position(
     play: Optional[str] = None,
     source: str = "",
     entry_price: Optional[float] = None,
+    profile_id: Optional[int] = None,
+    client_ref: str = "",
 ) -> int:
     with get_db(write=True) as conn:
         cur = conn.execute(
@@ -135,13 +154,13 @@ def insert_pending_position(
                (signal_log_id, symbol, side, entry_order_id, sl_order_id,
                 tp_order_id, entry_price, sl_price, tp_price, quantity,
                 notional_usdt, leverage, opened_at, expire_at, status,
-                play, source, entry_deadline)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,'pending_entry',?,?,?)""",
+                play, source, entry_deadline, profile_id, client_ref)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,'pending_entry',?,?,?,?,?)""",
             (
                 signal_log_id, symbol, side, entry_order_id, None,
                 None, entry_price, sl_price, tp_price, quantity,
                 notional_usdt, leverage, opened_at,
-                play, source, entry_deadline,
+                play, source, entry_deadline, profile_id, client_ref or "",
             ),
         )
         return cur.lastrowid

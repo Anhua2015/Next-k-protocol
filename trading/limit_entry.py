@@ -89,6 +89,7 @@ def open_limit(
             quantity=qty, notional_usdt=signal.get("notional_usdt") or margin, leverage=leverage,
             opened_at=_now_utc(), entry_deadline=deadline,
             play=play, source=source,
+            profile_id=signal.get("profile_id"), client_ref=signal.get("client_ref") or "",
         )
         update_signal_status(signal_log_id, "pending_entry")
         from observability.metrics import TRADES_OPENED

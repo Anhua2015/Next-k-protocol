@@ -509,6 +509,8 @@ async def list_positions(
     ),
     limit: int = Query(100, ge=1, le=1000, description="每页条数"),
     offset: int = Query(0, ge=0, description="分页偏移量"),
+    source: Optional[str] = Query(None, description="按信号来源过滤"),
+    profile_id: Optional[int] = Query(None, description="按策略 profile_id 过滤"),
 ):
     """查询持仓列表，包含完整 P&L 明细。
 
@@ -528,7 +530,13 @@ async def list_positions(
     """
     if status and status not in ("open", "closed", "pending_entry", "cancelled_pending"):
         raise HTTPException(status_code=400, detail="status must be 'open' | 'closed' | 'pending_entry' | 'cancelled_pending'")
-    rows = _db.list_positions(status=status, limit=limit, offset=offset)
+    rows = _db.list_positions(
+        status=status,
+        limit=limit,
+        offset=offset,
+        source=source,
+        profile_id=profile_id,
+    )
     return rows
 
 

@@ -132,6 +132,7 @@ def open_market(
         entry_price=actual_entry, sl_price=final_sl_p, tp_price=final_tp_p,
         quantity=qty, notional_usdt=signal.get("notional_usdt") or margin, leverage=leverage,
         opened_at=_now_utc(), play=play, source=source,
+        profile_id=signal.get("profile_id"), client_ref=signal.get("client_ref") or "",
     )
     update_signal_status(signal_log_id, "traded")
     from observability.metrics import TRADES_OPENED
