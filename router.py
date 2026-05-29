@@ -210,8 +210,16 @@ async def account_summary():
     try:
         raw = get_account_summary()
     except Exception as exc:
-        logger.error("account summary failed: %s", exc)
-        raise HTTPException(status_code=502, detail=f"account_summary_failed: {exc}") from exc
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        logger.error(
+            "account summary failed: type=%s upstream_status=%s",
+            type(exc).__name__,
+            status_code,
+        )
+        detail = "account_summary_failed"
+        if status_code:
+            detail = f"account_summary_failed_upstream_{status_code}"
+        raise HTTPException(status_code=502, detail=detail) from exc
 
     def _int_cfg(key: str, default: str) -> int:
         try:
