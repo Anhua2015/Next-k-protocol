@@ -63,6 +63,16 @@ def _update_sl_event_id(position_id: int) -> str:
     return f"update_sl_{position_id}_{timestamp_ms}"
 
 
+def _safe_log_trade_event(**kwargs) -> None:
+    try:
+        _db.log_trade_event(**kwargs)
+    except Exception as exc:
+        logger.warning(
+            "trade event log failed: action=%s source=%s type=%s",
+            kwargs.get("action"), kwargs.get("source"), type(exc).__name__,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Health（公开）
 # ---------------------------------------------------------------------------
@@ -435,7 +445,7 @@ async def close_position(body: ClosePositionRequest):
             close_price=body.close_price,
             position_id=body.position_id,
         )
-        _db.log_trade_event(
+        _safe_log_trade_event(
             source=body.source,
             action="close",
             symbol=body.symbol,
@@ -456,7 +466,7 @@ async def close_position(body: ClosePositionRequest):
         raise
     except Exception as exc:
         logger.error("close_position failed %s %s: %s", body.side, body.symbol, exc)
-        _db.log_trade_event(
+        _safe_log_trade_event(
             source=body.source,
             action="close",
             symbol=body.symbol,
@@ -534,7 +544,7 @@ async def update_position_sl(position_id: int, body: UpdateSlRequest):
             logger.info("update_sl: cancelled old SL %s for pos=%s", old_sl_id, position_id)
         except Exception as exc:
             logger.error("update_sl: cancel old SL %s failed: %s", old_sl_id, exc)
-            _db.log_trade_event(
+            _safe_log_trade_event(
                 source=source,
                 action="update_sl",
                 symbol=symbol,
@@ -563,7 +573,7 @@ async def update_position_sl(position_id: int, body: UpdateSlRequest):
         new_sl_id = str(new_sl_resp.get("algoId", "") or new_sl_resp.get("orderId", ""))
     except Exception as exc:
         logger.error("update_sl: place new SL failed pos=%s: %s", position_id, exc)
-        _db.log_trade_event(
+        _safe_log_trade_event(
             source=source,
             action="update_sl",
             symbol=symbol,
@@ -589,7 +599,7 @@ async def update_position_sl(position_id: int, body: UpdateSlRequest):
             )
     except Exception as exc:
         logger.error("update_sl: db update failed pos=%s: %s", position_id, exc)
-        _db.log_trade_event(
+        _safe_log_trade_event(
             source=source,
             action="update_sl",
             symbol=symbol,
@@ -605,7 +615,7 @@ async def update_position_sl(position_id: int, body: UpdateSlRequest):
         )
         raise HTTPException(status_code=500, detail="DB update failed after SL placed")
 
-    _db.log_trade_event(
+    _safe_log_trade_event(
         source=source,
         action="update_sl",
         symbol=symbol,

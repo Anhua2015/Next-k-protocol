@@ -26,10 +26,8 @@ def _log_closed_position_event(
     pnl_usdt: float,
     pnl_pct: float,
 ) -> None:
-    from db import log_trade_event
-
     action = _close_event_action(close_reason)
-    log_trade_event(
+    _safe_log_trade_event(
         source=pos.get("source") or "",
         action=action,
         symbol=pos.get("symbol") or "",
@@ -48,6 +46,18 @@ def _log_closed_position_event(
             "skip_reason": close_reason,
         },
     )
+
+
+def _safe_log_trade_event(**kwargs) -> None:
+    from db import log_trade_event
+
+    try:
+        log_trade_event(**kwargs)
+    except Exception as exc:
+        logger.warning(
+            "trade event log failed: action=%s source=%s type=%s",
+            kwargs.get("action"), kwargs.get("source"), type(exc).__name__,
+        )
 
 
 def _record_closed_position(

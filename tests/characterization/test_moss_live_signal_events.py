@@ -61,3 +61,28 @@ def test_log_trade_event_records_non_open_actions(seeded_config):
     assert rows[0]["sl_price"] == 65000
     assert rows[0]["skip_reason"] == "sl_adjusted"
     assert json.loads(rows[0]["payload_json"])["new_sl_price"] == 65000
+
+
+def test_log_trade_event_keeps_legacy_positional_arguments(seeded_config):
+    import db
+
+    event_id = db.log_trade_event(
+        "moss_quant",
+        "update_sl",
+        "BTCUSDT",
+        "LONG",
+        "moss-legacy-positional",
+        "traded",
+        9,
+        77,
+        "moss:9:update_sl:legacy",
+        {"new_sl_price": 65000},
+        {"ok": True},
+    )
+
+    rows = db.list_signals(source="moss_quant", action="update_sl", profile_id=9, limit=10)
+    assert rows[0]["id"] == event_id
+    assert rows[0]["profile_id"] == 9
+    assert rows[0]["position_id"] == 77
+    assert rows[0]["client_ref"] == "moss:9:update_sl:legacy"
+    assert json.loads(rows[0]["payload_json"])["new_sl_price"] == 65000
