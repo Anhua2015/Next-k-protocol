@@ -36,6 +36,7 @@ def _log_closed_position_event(
         side=pos.get("side") or "",
         api_signal_id=f"position_{pos['id']}_{action}",
         status="closed",
+        skip_reason=close_reason,
         profile_id=pos.get("profile_id"),
         position_id=pos.get("id"),
         client_ref=pos.get("client_ref") or "",

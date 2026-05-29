@@ -51,3 +51,4 @@ def test_update_sl_writes_signal_event(seeded_config, mock_binance):
     assert events
     assert events[0]["position_id"] == pos_id
     assert events[0]["status"] == "traded"
+    assert events[0]["sl_price"] == 64500

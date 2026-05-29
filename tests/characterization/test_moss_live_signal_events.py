@@ -49,6 +49,8 @@ def test_log_trade_event_records_non_open_actions(seeded_config):
         profile_id=9,
         position_id=77,
         client_ref="moss:9:update_sl:1",
+        sl_price=65000,
+        skip_reason="sl_adjusted",
         payload={"new_sl_price": 65000},
         result={"ok": True},
     )
@@ -56,4 +58,6 @@ def test_log_trade_event_records_non_open_actions(seeded_config):
     rows = db.list_signals(source="moss_quant", action="update_sl", profile_id=9, limit=10)
     assert rows[0]["id"] == event_id
     assert rows[0]["position_id"] == 77
+    assert rows[0]["sl_price"] == 65000
+    assert rows[0]["skip_reason"] == "sl_adjusted"
     assert json.loads(rows[0]["payload_json"])["new_sl_price"] == 65000
