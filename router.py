@@ -54,6 +54,15 @@ def _now_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _model_payload(body) -> dict:
+    return body.model_dump() if hasattr(body, "model_dump") else body.dict()
+
+
+def _update_sl_event_id(position_id: int) -> str:
+    timestamp_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    return f"update_sl_{position_id}_{timestamp_ms}"
+
+
 # ---------------------------------------------------------------------------
 # Health（公开）
 # ---------------------------------------------------------------------------
@@ -426,6 +435,19 @@ async def close_position(body: ClosePositionRequest):
             close_price=body.close_price,
             position_id=body.position_id,
         )
+        _db.log_trade_event(
+            source=body.source,
+            action="close",
+            symbol=body.symbol,
+            side=body.side,
+            api_signal_id=body.api_signal_id,
+            status="traded" if ok else "error",
+            profile_id=body.profile_id,
+            position_id=body.position_id,
+            client_ref=body.client_ref,
+            payload=_model_payload(body),
+            result={"ok": bool(ok), "action": "closed" if ok else "not_found"},
+        )
         if ok:
             return {"ok": True, "symbol": body.symbol, "action": "closed"}
         else:
@@ -434,6 +456,19 @@ async def close_position(body: ClosePositionRequest):
         raise
     except Exception as exc:
         logger.error("close_position failed %s %s: %s", body.side, body.symbol, exc)
+        _db.log_trade_event(
+            source=body.source,
+            action="close",
+            symbol=body.symbol,
+            side=body.side,
+            api_signal_id=body.api_signal_id,
+            status="error",
+            profile_id=body.profile_id,
+            position_id=body.position_id,
+            client_ref=body.client_ref,
+            payload=_model_payload(body),
+            result={"ok": False, "error": str(exc)},
+        )
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -473,6 +508,10 @@ async def update_position_sl(position_id: int, body: UpdateSlRequest):
     side = pos["side"]
     old_sl_id = pos.get("sl_order_id")
     qty = pos.get("quantity")
+    profile_id = body.profile_id if body.profile_id is not None else pos.get("profile_id")
+    client_ref = body.client_ref
+    api_signal_id = client_ref or _update_sl_event_id(position_id)
+    source = pos.get("source") or ""
     if not qty:
         raise HTTPException(status_code=400, detail="position has no quantity")
     position_side = side if _db.get_config("hedge_mode", "").lower() == "true" else None
@@ -495,6 +534,19 @@ async def update_position_sl(position_id: int, body: UpdateSlRequest):
             logger.info("update_sl: cancelled old SL %s for pos=%s", old_sl_id, position_id)
         except Exception as exc:
             logger.error("update_sl: cancel old SL %s failed: %s", old_sl_id, exc)
+            _db.log_trade_event(
+                source=source,
+                action="update_sl",
+                symbol=symbol,
+                side=side,
+                api_signal_id=api_signal_id,
+                status="error",
+                profile_id=profile_id,
+                position_id=position_id,
+                client_ref=client_ref,
+                payload={"old_sl_order_id": old_sl_id, "new_sl_price": body.new_sl_price},
+                result={"ok": False, "stage": "cancel_old_sl", "error": str(exc)},
+            )
             raise HTTPException(status_code=502, detail=f"cancel old SL failed: {exc}")
 
     # 下新 STOP_MARKET 条件单
@@ -510,6 +562,19 @@ async def update_position_sl(position_id: int, body: UpdateSlRequest):
         new_sl_id = str(new_sl_resp.get("algoId", "") or new_sl_resp.get("orderId", ""))
     except Exception as exc:
         logger.error("update_sl: place new SL failed pos=%s: %s", position_id, exc)
+        _db.log_trade_event(
+            source=source,
+            action="update_sl",
+            symbol=symbol,
+            side=side,
+            api_signal_id=api_signal_id,
+            status="error",
+            profile_id=profile_id,
+            position_id=position_id,
+            client_ref=client_ref,
+            payload={"old_sl_order_id": old_sl_id, "new_sl_price": body.new_sl_price},
+            result={"ok": False, "stage": "place_new_sl", "error": str(exc)},
+        )
         raise HTTPException(status_code=500, detail=f"place new SL failed: {exc}")
 
     # 更新数据库（下单成功后才写，保证 DB 与交易所一致）
@@ -522,7 +587,34 @@ async def update_position_sl(position_id: int, body: UpdateSlRequest):
             )
     except Exception as exc:
         logger.error("update_sl: db update failed pos=%s: %s", position_id, exc)
+        _db.log_trade_event(
+            source=source,
+            action="update_sl",
+            symbol=symbol,
+            side=side,
+            api_signal_id=api_signal_id,
+            status="error",
+            profile_id=profile_id,
+            position_id=position_id,
+            client_ref=client_ref,
+            payload={"old_sl_order_id": old_sl_id, "new_sl_price": body.new_sl_price},
+            result={"ok": False, "stage": "db_update", "error": str(exc)},
+        )
         raise HTTPException(status_code=500, detail="DB update failed after SL placed")
+
+    _db.log_trade_event(
+        source=source,
+        action="update_sl",
+        symbol=symbol,
+        side=side,
+        api_signal_id=api_signal_id,
+        status="traded",
+        profile_id=profile_id,
+        position_id=position_id,
+        client_ref=client_ref,
+        payload={"old_sl_order_id": old_sl_id, "new_sl_price": body.new_sl_price},
+        result={"ok": True, "new_sl_order_id": new_sl_id, "new_sl_price": new_sl},
+    )
 
     logger.info("update_sl: pos=%s symbol=%s old_sl_id=%s new_sl=%.6f new_sl_id=%s",
                 position_id, symbol, old_sl_id, new_sl, new_sl_id)

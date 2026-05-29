@@ -9,6 +9,46 @@ from binance.time_sync import now_utc as _now_utc
 logger = logging.getLogger("lifecycle.close")
 
 
+def _close_event_action(close_reason: str) -> str:
+    return {
+        "tp": "exchange_tp",
+        "sl": "exchange_sl",
+        "external": "external_close",
+        "paper_close": "external_close",
+        "manual": "external_close",
+    }.get(close_reason, "external_close")
+
+
+def _log_closed_position_event(
+    pos: Dict[str, Any],
+    close_reason: str,
+    close_price: Optional[float],
+    pnl_usdt: float,
+    pnl_pct: float,
+) -> None:
+    from db import log_trade_event
+
+    action = _close_event_action(close_reason)
+    log_trade_event(
+        source=pos.get("source") or "",
+        action=action,
+        symbol=pos.get("symbol") or "",
+        side=pos.get("side") or "",
+        api_signal_id=f"position_{pos['id']}_{action}",
+        status="closed",
+        profile_id=pos.get("profile_id"),
+        position_id=pos.get("id"),
+        client_ref=pos.get("client_ref") or "",
+        payload={"close_reason": close_reason},
+        result={
+            "close_price": close_price,
+            "pnl_usdt": pnl_usdt,
+            "pnl_pct": pnl_pct,
+            "skip_reason": close_reason,
+        },
+    )
+
+
 def _record_closed_position(
     pos: Dict[str, Any], close_reason: str, close_price: Optional[float],
 ) -> None:
@@ -25,6 +65,7 @@ def _record_closed_position(
             close_price=close_price or 0.0, closed_at=_now_utc(),
             pnl_usdt=0.0, pnl_pct=0.0,
         )
+        _log_closed_position_event(pos, close_reason, close_price or 0.0, 0.0, 0.0)
         return
 
     if side == "LONG":
@@ -39,6 +80,9 @@ def _record_closed_position(
         position_id=pos["id"], close_reason=close_reason,
         close_price=close_price, closed_at=_now_utc(),
         pnl_usdt=round(pnl, 4), pnl_pct=round(pnl_pct, 4),
+    )
+    _log_closed_position_event(
+        pos, close_reason, close_price, round(pnl, 4), round(pnl_pct, 4),
     )
     signal_log_id = pos.get("signal_log_id")
     if signal_log_id:
