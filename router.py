@@ -309,6 +309,10 @@ async def ingest_signals(body: SignalIngestRequest):
 async def list_signals(
     limit: int = Query(100, ge=1, le=1000, description="每页条数，最大 1000"),
     offset: int = Query(0, ge=0, description="分页偏移量"),
+    source: Optional[str] = Query(None, description="按信号来源过滤"),
+    action: Optional[str] = Query(None, description="按信号动作过滤"),
+    status: Optional[str] = Query(None, description="按处理状态过滤"),
+    profile_id: Optional[int] = Query(None, description="按策略 profile_id 过滤"),
 ):
     """查询信号处理日志。
 
@@ -324,7 +328,14 @@ async def list_signals(
       - 'error'：处理失败（skip_reason 中有详细错误信息）
     - **skip_reason**: 跳过或失败的具体原因
     """
-    rows = _db.list_signals(limit=limit, offset=offset)
+    rows = _db.list_signals(
+        limit=limit,
+        offset=offset,
+        source=source,
+        action=action,
+        status=status,
+        profile_id=profile_id,
+    )
     return rows
 
 

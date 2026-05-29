@@ -51,6 +51,11 @@ def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
         confidence=sig.confidence, regime=sig.regime,
         notional_usdt=sig.notional_usdt, received_at=now_utc(),
         play=sig.play or "",
+        profile_id=getattr(sig, "profile_id", None),
+        client_ref=getattr(sig, "client_ref", None) or "",
+        action=getattr(sig, "action", None) or (
+            "rolling" if "rolling" in (sig.play or "").lower() else "open"
+        ),
     )
     if sid is None:
         return GuardDecision(skip=True, action="duplicate")

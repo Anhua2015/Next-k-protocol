@@ -35,6 +35,7 @@ from repos.config_repo import (
 from repos.signals_repo import (
     insert_signal,
     list_signals,
+    log_trade_event,
     update_status as update_signal_status,
 )
 
