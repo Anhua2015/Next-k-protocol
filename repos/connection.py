@@ -55,9 +55,12 @@ _ENV_TO_CONFIG: Dict[str, str] = {
 _PERF_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_signals_log_dedup ON signals_log(source, api_signal_id)",
     "CREATE INDEX IF NOT EXISTS idx_signals_log_status ON signals_log(status)",
+    "CREATE INDEX IF NOT EXISTS idx_signals_log_source_action ON signals_log(source, action, status)",
+    "CREATE INDEX IF NOT EXISTS idx_signals_log_profile ON signals_log(source, profile_id)",
     "CREATE INDEX IF NOT EXISTS idx_positions_status_symbol ON positions(status, symbol)",
     "CREATE INDEX IF NOT EXISTS idx_positions_status_play ON positions(status, play)",
     "CREATE INDEX IF NOT EXISTS idx_positions_status_source ON positions(status, source)",
+    "CREATE INDEX IF NOT EXISTS idx_positions_source_profile_status ON positions(source, profile_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_positions_expire_at ON positions(status, expire_at)",
     "CREATE INDEX IF NOT EXISTS idx_positions_closed_at ON positions(closed_at)",
 ]
@@ -84,6 +87,12 @@ CREATE TABLE IF NOT EXISTS signals_log (
     status         TEXT    NOT NULL DEFAULT 'received',
     skip_reason    TEXT,
     play           TEXT    DEFAULT '',
+    profile_id     INTEGER,
+    client_ref     TEXT    DEFAULT '',
+    action         TEXT    DEFAULT 'open',
+    position_id    INTEGER,
+    payload_json   TEXT,
+    result_json    TEXT,
     UNIQUE(source, api_signal_id)
 );
 
@@ -111,7 +120,9 @@ CREATE TABLE IF NOT EXISTS positions (
     pnl_pct         REAL,
     play            TEXT    DEFAULT '',
     source          TEXT    DEFAULT '',
-    entry_deadline  TEXT
+    entry_deadline  TEXT,
+    profile_id      INTEGER,
+    client_ref      TEXT    DEFAULT ''
 );
 """
 
@@ -149,6 +160,21 @@ def init_db() -> None:
             logger.info("migrated: positions.entry_deadline column added")
         except Exception:
             pass
+        for table, column, ddl in [
+            ("signals_log", "profile_id", "ALTER TABLE signals_log ADD COLUMN profile_id INTEGER"),
+            ("signals_log", "client_ref", "ALTER TABLE signals_log ADD COLUMN client_ref TEXT DEFAULT ''"),
+            ("signals_log", "action", "ALTER TABLE signals_log ADD COLUMN action TEXT DEFAULT 'open'"),
+            ("signals_log", "position_id", "ALTER TABLE signals_log ADD COLUMN position_id INTEGER"),
+            ("signals_log", "payload_json", "ALTER TABLE signals_log ADD COLUMN payload_json TEXT"),
+            ("signals_log", "result_json", "ALTER TABLE signals_log ADD COLUMN result_json TEXT"),
+            ("positions", "profile_id", "ALTER TABLE positions ADD COLUMN profile_id INTEGER"),
+            ("positions", "client_ref", "ALTER TABLE positions ADD COLUMN client_ref TEXT DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(ddl)
+                logger.info("migrated: %s.%s column added", table, column)
+            except Exception:
+                pass
         for env_key, config_key in _ENV_TO_CONFIG.items():
             env_val = os.getenv(env_key, "").strip()
             if env_val:
