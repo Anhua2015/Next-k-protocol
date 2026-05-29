@@ -232,6 +232,21 @@ class PnlSummaryOut(BaseModel):
     daily: List[DailyPnl] = Field(default_factory=list, description="近 30 日每日 PnL 明细")
 
 
+class MossQuantAccountConfig(BaseModel):
+    enabled: bool = Field(..., description="Moss Quant source 是否启用")
+    leverage: int = Field(..., description="Moss Quant protocol 杠杆")
+    max_positions: int = Field(..., description="Moss Quant 最大持仓数")
+    entry_type: str = Field(..., description="Moss Quant 入场类型")
+
+
+class AccountSummaryOut(BaseModel):
+    asset: str = Field("USDT", description="账户资产")
+    wallet_balance_usdt: float = Field(..., description="USDT 钱包余额")
+    available_balance_usdt: float = Field(..., description="USDT 可用余额")
+    unrealized_pnl_usdt: float = Field(..., description="当前未实现盈亏")
+    moss_quant: MossQuantAccountConfig = Field(..., description="Moss Quant protocol 配置摘要")
+
+
 class StatusOut(BaseModel):
     """服务状态概览。"""
 

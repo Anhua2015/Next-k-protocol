@@ -26,6 +26,7 @@ from auth import require_auth
 from trader import close_position as do_close
 from trader import execute_trade
 from models import (
+    AccountSummaryOut,
     ClosePositionRequest,
     ConfigUpdate,
     PnlSummaryOut,
@@ -195,6 +196,38 @@ async def update_config(body: ConfigUpdate):
     logger.info("config update keys=%s", list(sanitized.keys()))
     _db.set_config_batch(body.pairs)
     return {"ok": True, "updated": list(body.pairs.keys())}
+
+
+@router.get(
+    "/account/summary",
+    response_model=AccountSummaryOut,
+    summary="读取币安合约账户摘要",
+    dependencies=[Depends(require_auth)],
+)
+async def account_summary():
+    from trader import get_account_summary
+
+    try:
+        raw = get_account_summary()
+    except Exception as exc:
+        logger.error("account summary failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"account_summary_failed: {exc}") from exc
+
+    def _int_cfg(key: str, default: str) -> int:
+        try:
+            return int(_db.get_config(key, default))
+        except ValueError:
+            return int(default)
+
+    return {
+        **raw,
+        "moss_quant": {
+            "enabled": _db.get_config("src_moss_quant_enabled", "false").lower() == "true",
+            "leverage": _int_cfg("src_moss_quant_leverage", "10"),
+            "max_positions": _int_cfg("src_moss_quant_max_positions", "10"),
+            "entry_type": _db.get_config("src_moss_quant_entry_type", "MARKET"),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
