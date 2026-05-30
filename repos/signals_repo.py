@@ -62,6 +62,37 @@ def update_status(
         )
 
 
+def update_execution(
+    signal_id: int,
+    *,
+    status: str,
+    position_id: Optional[int] = None,
+    result: Optional[Dict[str, Any]] = None,
+    payload: Optional[Dict[str, Any]] = None,
+    skip_reason: Optional[str] = None,
+) -> None:
+    assignments = ["status=?"]
+    params: List[Any] = [status]
+    if position_id is not None:
+        assignments.append("position_id=?")
+        params.append(position_id)
+    if result is not None:
+        assignments.append("result_json=?")
+        params.append(json.dumps(result))
+    if payload is not None:
+        assignments.append("payload_json=?")
+        params.append(json.dumps(payload))
+    if skip_reason is not None:
+        assignments.append("skip_reason=?")
+        params.append(skip_reason)
+    params.append(signal_id)
+    with get_db(write=True) as conn:
+        conn.execute(
+            f"UPDATE signals_log SET {', '.join(assignments)} WHERE id=?",
+            params,
+        )
+
+
 def list_signals(
     limit: int = 100,
     offset: int = 0,

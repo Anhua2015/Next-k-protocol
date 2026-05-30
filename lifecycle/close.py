@@ -106,16 +106,25 @@ def _record_closed_position(
 
 
 def _get_latest_open_for_symbol_source(
-    symbol: str, source: str,
+    symbol: str, source: str, profile_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
-    """查询指定 symbol+source 的最新 open 持仓（ORDER BY id DESC）。"""
+    """查询指定 symbol+source/profile 的最新 open 持仓（ORDER BY id DESC）。"""
     from repos.connection import get_db
+    clauses = [
+        "status IN ('open','pending_entry')",
+        "symbol=?",
+        "source=?",
+    ]
+    params: list[Any] = [symbol, source]
+    if profile_id is not None:
+        clauses.append("profile_id=?")
+        params.append(profile_id)
     with get_db() as conn:
         row = conn.execute(
             "SELECT * FROM positions "
-            "WHERE status IN ('open','pending_entry') AND symbol=? AND source=? "
+            f"WHERE {' AND '.join(clauses)} "
             "ORDER BY id DESC LIMIT 1",
-            (symbol, source),
+            params,
         ).fetchone()
     return dict(row) if row else None
 
@@ -124,6 +133,7 @@ def close_position(
     source: str, symbol: str, side: str,
     exit_rule: str, close_price: Optional[float] = None,
     position_id: Optional[int] = None,
+    profile_id: Optional[int] = None,
 ) -> bool:
     """平仓：取消 SL/TP 条件单 + MARKET 平仓 + 记录 PnL。"""
     from db import (
@@ -138,14 +148,28 @@ def close_position(
         place_order,
     )
 
-    logger.info("close_position: source=%s symbol=%s side=%s rule=%s close=%s pos_id=%s",
-                source, symbol, side, exit_rule, close_price, position_id)
+    logger.info("close_position: source=%s symbol=%s side=%s rule=%s close=%s pos_id=%s profile_id=%s",
+                source, symbol, side, exit_rule, close_price, position_id, profile_id)
 
     if position_id:
         pos = get_position_by_id(position_id)
+        if (
+            pos is not None
+            and source == "moss_quant"
+            and profile_id is not None
+            and pos.get("profile_id") != profile_id
+        ):
+            logger.warning(
+                "close_position moss profile mismatch: req=%s db=%s pos=%s",
+                profile_id, pos.get("profile_id"), position_id,
+            )
+            return False
     elif source == "moss_quant":
-        # moss_quant 同 symbol 可有多仓（滚仓），取最新 open 持仓
-        pos = _get_latest_open_for_symbol_source(symbol, source)
+        if profile_id is None:
+            logger.warning("close_position moss_quant fallback requires profile_id")
+            return False
+        # moss_quant 同 symbol 可有多仓，fallback 必须按 profile 精确定位。
+        pos = _get_latest_open_for_symbol_source(symbol, source, profile_id=profile_id)
     else:
         pos = get_open_position_for_symbol(symbol)
     if pos is None:

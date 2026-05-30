@@ -37,6 +37,12 @@ def dispatch(sig: Any, signal_log_id: int) -> Dict[str, Any]:
         }
         ok = execute_trade(signal_dict)
         detail["action"] = "traded" if ok else "error"
+        if ok:
+            import db as _d
+            pos = _d.get_position_by_signal_log_id(signal_log_id)
+            if pos:
+                detail["position_id"] = pos.get("id")
+                detail["status"] = pos.get("status")
         if not ok:
             detail["error"] = "execute_trade returned False"
         return detail

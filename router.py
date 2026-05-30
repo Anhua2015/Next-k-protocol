@@ -73,6 +73,24 @@ def _safe_log_trade_event(**kwargs) -> None:
         )
 
 
+def _resolve_moss_close_position_id(body: ClosePositionRequest) -> Optional[int]:
+    if body.position_id:
+        return body.position_id
+    if body.source != "moss_quant" or body.profile_id is None:
+        return None
+    for row in _db.list_positions(
+        source=body.source,
+        profile_id=body.profile_id,
+        limit=200,
+    ):
+        if (
+            row.get("symbol") == body.symbol
+            and row.get("status") in ("open", "pending_entry")
+        ):
+            return int(row["id"])
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Health（公开）
 # ---------------------------------------------------------------------------
@@ -437,13 +455,15 @@ async def close_position(body: ClosePositionRequest):
     )
 
     try:
+        resolved_position_id = _resolve_moss_close_position_id(body)
         ok = do_close(
             source=body.source,
             symbol=body.symbol,
             side=body.side,
             exit_rule=body.exit_rule,
             close_price=body.close_price,
-            position_id=body.position_id,
+            position_id=resolved_position_id,
+            profile_id=body.profile_id,
         )
         _safe_log_trade_event(
             source=body.source,
@@ -453,7 +473,7 @@ async def close_position(body: ClosePositionRequest):
             api_signal_id=body.api_signal_id,
             status="traded" if ok else "error",
             profile_id=body.profile_id,
-            position_id=body.position_id,
+            position_id=resolved_position_id,
             client_ref=body.client_ref,
             payload=_model_payload(body),
             result={"ok": bool(ok), "action": "closed" if ok else "not_found"},

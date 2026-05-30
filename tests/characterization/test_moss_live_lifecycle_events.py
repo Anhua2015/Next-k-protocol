@@ -98,9 +98,76 @@ def test_close_still_succeeds_when_event_log_fails(seeded_config, mock_binance, 
             "side": "LONG",
             "exit_rule": "manual",
             "close_price": 65500,
+            "profile_id": 5,
         },
         headers=AUTH,
     )
 
     assert resp.status_code == 200
     assert len(db.get_open_positions()) == 0
+
+
+def test_moss_close_fallback_filters_by_profile_id(seeded_config, mock_binance):
+    import db
+
+    pos_1 = db.insert_position(
+        signal_log_id=1,
+        symbol="BTCUSDT",
+        side="LONG",
+        entry_order_id="e1",
+        sl_order_id="s1",
+        tp_order_id="t1",
+        entry_price=67000,
+        sl_price=66000,
+        tp_price=69000,
+        quantity=0.01,
+        notional_usdt=670,
+        leverage=10,
+        opened_at="2026-05-29T00:00:00Z",
+        play="balanced",
+        source="moss_quant",
+        profile_id=1,
+        client_ref="moss:1:open:1",
+    )
+    pos_2 = db.insert_position(
+        signal_log_id=2,
+        symbol="BTCUSDT",
+        side="LONG",
+        entry_order_id="e2",
+        sl_order_id="s2",
+        tp_order_id="t2",
+        entry_price=68000,
+        sl_price=67000,
+        tp_price=70000,
+        quantity=0.02,
+        notional_usdt=1360,
+        leverage=10,
+        opened_at="2026-05-29T00:01:00Z",
+        play="balanced",
+        source="moss_quant",
+        profile_id=2,
+        client_ref="moss:2:open:1",
+    )
+    mock_binance.all()
+    client = _client(seeded_config)
+
+    resp = client.post(
+        "/api/binance/positions/close",
+        json={
+            "source": "moss_quant",
+            "api_signal_id": "moss:1:close:1",
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "exit_rule": "take_profit",
+            "close_price": 67250.5,
+            "profile_id": 1,
+            "client_ref": "moss:1:close:1",
+        },
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 200
+    assert db.get_position_by_id(pos_1)["status"] == "closed"
+    assert db.get_position_by_id(pos_2)["status"] == "open"
+    close_events = db.list_signals(source="moss_quant", action="close", profile_id=1, limit=10)
+    assert close_events[0]["position_id"] == pos_1

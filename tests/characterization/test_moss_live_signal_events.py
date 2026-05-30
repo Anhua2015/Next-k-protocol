@@ -86,3 +86,55 @@ def test_log_trade_event_keeps_legacy_positional_arguments(seeded_config):
     assert rows[0]["position_id"] == 77
     assert rows[0]["client_ref"] == "moss:9:update_sl:legacy"
     assert json.loads(rows[0]["payload_json"])["new_sl_price"] == 65000
+
+
+def test_moss_open_signal_log_links_position_and_result(seeded_config, mock_binance, request):
+    from fastapi.testclient import TestClient
+    import importlib
+    import sys
+
+    request.addfinalizer(lambda: [sys.modules.pop(mod, None) for mod in ("main", "router", "trader")])
+    for mod in ("main", "router", "trader"):
+        sys.modules.pop(mod, None)
+    import main
+
+    importlib.reload(main)
+    client = TestClient(main.app)
+    mock_binance.all()
+
+    resp = client.post(
+        "/api/binance/signals/ingest",
+        json={
+            "signals": [
+                {
+                    "source": "moss_quant",
+                    "api_signal_id": "moss:12:open:1",
+                    "symbol": "BTCUSDT",
+                    "side": "LONG",
+                    "entry_price": 67250.5,
+                    "sl_price": 66500.0,
+                    "tp_price": 68500.0,
+                    "notional_usdt": 500.0,
+                    "play": "balanced",
+                    "profile_id": 12,
+                    "client_ref": "moss:12:open:1",
+                    "action": "open",
+                }
+            ]
+        },
+        headers={"X-Maintenance-Token": "test-token"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["traded"] == 1
+    position_id = body["details"][0]["position_id"]
+
+    import db
+
+    rows = db.list_signals(source="moss_quant", action="open", profile_id=12, limit=10)
+    assert rows[0]["position_id"] == position_id
+    assert json.loads(rows[0]["payload_json"])["client_ref"] == "moss:12:open:1"
+    result = json.loads(rows[0]["result_json"])
+    assert result["ok"] is True
+    assert result["position_id"] == position_id

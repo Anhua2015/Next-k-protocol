@@ -127,6 +127,15 @@ def get_position_by_id(position_id: int) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
+def get_position_by_signal_log_id(signal_log_id: int) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM positions WHERE signal_log_id=? ORDER BY id DESC LIMIT 1",
+            (signal_log_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 # -- Pending-entry helpers ----------------------------------------------------
 
 def insert_pending_position(
