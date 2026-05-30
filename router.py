@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -42,7 +43,7 @@ router = APIRouter(
     tags=["币安实盘交易"],
 )
 
-_SENSITIVE_KEYS = {"binance_api_key", "binance_api_secret"}
+_ENV_ONLY_KEYS = {"binance_api_key", "binance_api_secret"}
 
 
 def _now_utc() -> str:
@@ -137,7 +138,7 @@ async def get_status():
         testnet=cfg.get("testnet", "false"),
         open_positions=len(open_positions_list),
         max_positions=cfg.get("max_positions", "8"),
-        api_key_set=bool(cfg.get("binance_api_key", "").strip()),
+        api_key_set=bool(os.getenv("BINANCE_API_KEY", "").strip()),
         db_path=str(_db.DB_PATH),
         strategy_positions={},
     )
@@ -151,7 +152,7 @@ async def get_status():
 @router.get(
     "/config",
     summary="读取交易配置",
-    description="返回所有配置键值对。敏感字段（binance_api_key/binance_api_secret）的值会脱敏为 '****'。需要鉴权。",
+    description="返回可通过 API 管理的交易配置键值对。币安 API Key/Secret 仅支持环境变量配置，不会出现在返回中。需要鉴权。",
     dependencies=[Depends(require_auth)],
 )
 async def get_config():
@@ -160,19 +161,16 @@ async def get_config():
     配置项说明：
     - **enabled**: 交易开关，'true'/'false'
     - **testnet**: 测试网开关，'true'/'false'
-    - **binance_api_key**: 币安 API Key（脱敏显示）
-    - **binance_api_secret**: 币安 API Secret（脱敏显示）
     - **max_positions**: 全局最大持仓数
     """
     cfg = _db.get_all_config()
-    masked = {k: ("****" if k in _SENSITIVE_KEYS and v else v) for k, v in cfg.items()}
-    return masked
+    return {k: v for k, v in cfg.items() if k not in _ENV_ONLY_KEYS}
 
 
 @router.post(
     "/config",
     summary="更新交易配置",
-    description="批量更新一个或多个配置项。敏感字段（binance_api_key/binance_api_secret）的值会在日志和返回中脱敏。需要鉴权。",
+    description="批量更新一个或多个配置项。币安 API Key/Secret 仅支持通过环境变量或部署平台配置，不可通过接口更新。需要鉴权。",
     dependencies=[Depends(require_auth)],
 )
 async def update_config(body: ConfigUpdate):
@@ -191,11 +189,12 @@ async def update_config(body: ConfigUpdate):
 
     注意：
     - 空字符串的值不会被写入（与缺失相同）
-    - API Key/Secret 写入后立即生效，无需重启
-    - 敏感字段的值会在日志中显示为 '****'
+    - 币安 API Key/Secret 仅支持通过 `.env.oi`、系统环境变量或 Railway 配置
     """
-    sanitized = {k: ("****" if k in _SENSITIVE_KEYS else v) for k, v in body.pairs.items()}
-    logger.info("config update keys=%s", list(sanitized.keys()))
+    blocked = sorted(k for k in body.pairs if k in _ENV_ONLY_KEYS)
+    if blocked:
+        raise HTTPException(status_code=400, detail="binance_credentials_env_only")
+    logger.info("config update keys=%s", list(body.pairs.keys()))
     _db.set_config_batch(body.pairs)
     return {"ok": True, "updated": list(body.pairs.keys())}
 

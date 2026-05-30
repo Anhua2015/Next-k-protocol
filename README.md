@@ -79,9 +79,9 @@ Request Flow:
 
 ### 配置管理
 
-- 通过 `GET/POST /api/binance/config` 读写配置
-- 环境变量首次初始化后存入 SQLite，后续通过 API 修改
-- 敏感字段（API Key/Secret）在日志和 GET 响应中自动脱敏
+- 通过 `GET/POST /api/binance/config` 读写非敏感交易配置
+- `BINANCE_API_KEY` / `BINANCE_API_SECRET` 仅通过 `.env.oi`、系统环境变量或 Railway 配置
+- `GET /api/binance/config` 不返回凭证，`POST /api/binance/config` 也不接受凭证更新
 
 ## 3. 目录结构
 
@@ -112,8 +112,8 @@ All env vars can be set via `.env.oi` file or system environment variables.
 |----------|---------|-------------|
 | `PORT` | 8001 | Service port |
 | `PROTOCOL_MAINTENANCE_TOKEN` | (empty) | API auth token. Required in production |
-| `BINANCE_API_KEY` | (empty) | Binance API Key |
-| `BINANCE_API_SECRET` | (empty) | Binance API Secret |
+| `BINANCE_API_KEY` | (empty) | Binance API Key（仅环境变量 / Railway） |
+| `BINANCE_API_SECRET` | (empty) | Binance API Secret（仅环境变量 / Railway） |
 | `BINANCE_TESTNET` | false | Use testnet |
 | `BINANCE_MARGIN_USDT` | 100 | Margin per trade (USDT) |
 | `BINANCE_LEVERAGE` | 10 | Leverage multiplier |

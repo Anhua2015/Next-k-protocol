@@ -15,7 +15,9 @@ Binance Futures live trading module. Supports ZCT VWAP / Momentum / Jiezhen thre
 
 ## Configuration
 
-All config stored in `binance.db` -> `config` table. Initial values seeded from environment variables on first start, then managed via `GET/POST /api/binance/config`.
+Trading config is stored in `binance.db` -> `config` table and managed via `GET/POST /api/binance/config`.
+Binance credentials are **not** stored or edited through that API; `BINANCE_API_KEY` / `BINANCE_API_SECRET`
+must come from `.env.oi`, process environment variables, or Railway environment configuration.
 
 See `.env.oi.example` for the full list.
 

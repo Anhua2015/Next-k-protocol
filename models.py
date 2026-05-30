@@ -16,7 +16,7 @@ class ConfigUpdate(BaseModel):
     pairs: Dict[str, str] = Field(
         ...,
         description='配置键值对，如 {"enabled": "true", "entry_type": "MARKET"}。'
-        "敏感字段（binance_api_key/binance_api_secret）的值会在日志中脱敏。",
+        "币安 API Key/Secret 不允许通过该接口修改。",
         examples=[{"enabled": "true", "entry_type": "MARKET"}],
     )
 

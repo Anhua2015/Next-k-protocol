@@ -23,8 +23,6 @@ DEFAULT_CONFIG: Dict[str, str] = {
 }
 
 _ENV_TO_CONFIG: Dict[str, str] = {
-    "BINANCE_API_KEY": "binance_api_key",
-    "BINANCE_API_SECRET": "binance_api_secret",
     "BINANCE_TESTNET": "testnet",
 }
 

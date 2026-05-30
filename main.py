@@ -71,8 +71,8 @@ async def lifespan(app: FastAPI):
             if get_config("testnet", "false").lower() == "true"
             else "https://fapi.binance.com"
         ),
-        api_key_fn=lambda: get_config("binance_api_key", ""),
-        secret_fn=lambda: get_config("binance_api_secret", ""),
+        api_key_fn=lambda: os.getenv("BINANCE_API_KEY", "").strip(),
+        secret_fn=lambda: os.getenv("BINANCE_API_SECRET", "").strip(),
     )
     logger.info("Binance HTTP client initialized")
 
