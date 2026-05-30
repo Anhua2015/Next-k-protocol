@@ -145,6 +145,176 @@ def _place_protective(s, cs, sp, q, ps, ts, k):
     return place_algo_order(_build_protective(s, cs, sp, q, ps, k))
 
 
+def _position_side_for_live_pos(pos: Dict[str, Any], hedge_mode: bool) -> Optional[str]:
+    if not hedge_mode:
+        return None
+    raw = str(pos.get("positionSide") or "").upper()
+    return raw or None
+
+
+def _cancel_open_sl_orders(symbol: str) -> None:
+    for order in get_open_algo_orders(symbol):
+        order_type = str(
+            order.get("type")
+            or order.get("origType")
+            or order.get("algoType")
+            or ""
+        ).upper()
+        if "STOP" not in order_type or "TAKE_PROFIT" in order_type:
+            continue
+        algo_id = order.get("algoId") or order.get("clientAlgoId")
+        if algo_id:
+            cancel_algo_order(str(algo_id))
+
+
+def _close_live_position(signal: Dict[str, Any]) -> bool:
+    signal_log_id = signal["signal_log_id"]
+    symbol = signal["symbol"]
+    requested_side = str(signal["side"]).upper()
+    source = signal.get("source", "") or ""
+
+    live_pos = get_live_position(symbol)
+    if not live_pos:
+        update_signal_status(signal_log_id, "error", "live_position_missing")
+        return False
+
+    amt = float(live_pos.get("positionAmt") or 0)
+    if amt == 0:
+        update_signal_status(signal_log_id, "error", "live_position_missing")
+        return False
+
+    actual_side = "LONG" if amt > 0 else "SHORT"
+    if requested_side != actual_side:
+        update_signal_status(
+            signal_log_id,
+            "error",
+            f"side_mismatch:{requested_side}->{actual_side}",
+        )
+        return False
+
+    hedge_mode = _detect_hedge_mode()
+    position_side = _position_side_for_live_pos(live_pos, hedge_mode)
+    qty = abs(amt)
+
+    try:
+        cancel_all_orders(symbol)
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": "SELL" if actual_side == "LONG" else "BUY",
+            "type": "MARKET",
+            "quantity": qty,
+            "reduceOnly": "true",
+        }
+        if position_side:
+            params["positionSide"] = position_side
+            params.pop("reduceOnly", None)
+        resp = place_order(params)
+    except Exception as exc:
+        logger.error("close live position failed %s %s: %s", actual_side, symbol, exc)
+        update_signal_status(signal_log_id, "error", f"close_failed: {exc}")
+        return False
+
+    update_signal_status(signal_log_id, "traded", None)
+    from repos.signals_repo import update_execution
+
+    update_execution(
+        signal_log_id,
+        status="traded",
+        result={
+            "source": source,
+            "action": "close",
+            "symbol": symbol,
+            "side": actual_side,
+            "quantity": qty,
+            "close_price": signal.get("close_price"),
+            "order": resp,
+        },
+        payload={
+            "symbol": symbol,
+            "side": requested_side,
+            "close_price": signal.get("close_price"),
+            "client_ref": signal.get("client_ref") or "",
+        },
+    )
+    return True
+
+
+def _update_live_stop_loss(signal: Dict[str, Any]) -> bool:
+    signal_log_id = signal["signal_log_id"]
+    symbol = signal["symbol"]
+    side = str(signal["side"]).upper()
+    new_sl_price = signal.get("sl_price")
+    if new_sl_price is None:
+        update_signal_status(signal_log_id, "error", "missing_sl_price")
+        return False
+
+    live_pos = get_live_position(symbol)
+    if not live_pos:
+        update_signal_status(signal_log_id, "error", "live_position_missing")
+        return False
+
+    amt = float(live_pos.get("positionAmt") or 0)
+    if amt == 0:
+        update_signal_status(signal_log_id, "error", "live_position_missing")
+        return False
+
+    actual_side = "LONG" if amt > 0 else "SHORT"
+    if side != actual_side:
+        update_signal_status(
+            signal_log_id,
+            "error",
+            f"side_mismatch:{side}->{actual_side}",
+        )
+        return False
+
+    hedge_mode = _detect_hedge_mode()
+    position_side = _position_side_for_live_pos(live_pos, hedge_mode)
+    qty = abs(amt)
+    mark_px = float(live_pos.get("markPrice") or get_mark_price(symbol) or 0)
+    close_side = "SELL" if actual_side == "LONG" else "BUY"
+    try:
+        step_size, tick_size, _min_notional = _get_filters(symbol)
+        _validate_sl_distance(actual_side, float(new_sl_price), mark_px, tick_size)
+        _cancel_open_sl_orders(symbol)
+        resp = _place_protective(
+            symbol,
+            close_side,
+            _round_price(float(new_sl_price), tick_size),
+            _round_quantity(qty, step_size),
+            position_side,
+            tick_size,
+            "SL",
+        )
+    except Exception as exc:
+        logger.error("update live stop failed %s %s: %s", actual_side, symbol, exc)
+        update_signal_status(signal_log_id, "error", f"update_sl_failed: {exc}")
+        return False
+
+    update_signal_status(signal_log_id, "traded", None)
+    from repos.signals_repo import update_execution
+
+    update_execution(
+        signal_log_id,
+        status="traded",
+        result={
+            "action": "update_sl",
+            "symbol": symbol,
+            "side": actual_side,
+            "quantity": qty,
+            "mark_price": mark_px,
+            "new_sl_price": float(new_sl_price),
+            "sl_order": resp,
+        },
+        payload={
+            "symbol": symbol,
+            "side": side,
+            "new_sl_price": float(new_sl_price),
+            "client_ref": signal.get("client_ref") or "",
+        },
+    )
+    return True
+
+
 # -- execute_trade (Phase 4: orchestrator, delegates to trading/) ------------
 
 def execute_trade(signal: Dict[str, Any]) -> bool:
@@ -161,6 +331,11 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
 
     logger.info("execute_trade: source=%s symbol=%s side=%s play=%s id=%s",
                 source, symbol, side, play, signal_log_id)
+
+    if action == "close":
+        return _close_live_position(signal)
+    if action == "update_sl":
+        return _update_live_stop_loss(signal)
 
     # Resolve margin/leverage
     try:

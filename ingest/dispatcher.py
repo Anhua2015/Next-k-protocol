@@ -26,10 +26,15 @@ def dispatch(sig: Any, signal_log_id: int) -> Dict[str, Any]:
             "symbol": symbol,
             "side": side,
             "source": source,
-            "margin_usdt": float(sig.margin_usdt),
+            "margin_usdt": (
+                float(sig.margin_usdt) if sig.margin_usdt is not None else None
+            ),
             "entry_price": float(sig.entry_price) if sig.entry_price is not None else None,
             "sl_price": float(sig.sl_price) if sig.sl_price is not None else None,
             "tp_price": float(sig.tp_price) if sig.tp_price is not None else None,
+            "close_price": (
+                float(sig.close_price) if sig.close_price is not None else None
+            ),
             "play": sig.play or "",
             "profile_id": sig.profile_id,
             "client_ref": sig.client_ref or "",

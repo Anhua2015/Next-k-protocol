@@ -7,9 +7,10 @@ pytestmark = pytest.mark.characterization
 AUTH = {"X-Maintenance-Token": "test-token"}
 
 
-def test_signal_item_requires_margin_usdt(seeded_config):
+def test_open_signal_without_margin_is_rejected_at_execution(seeded_config, mock_binance):
     import main
 
+    mock_binance.all(position_risk="position_risk_closed")
     client = TestClient(main.app)
     resp = client.post(
         "/api/binance/signals/ingest",
@@ -26,8 +27,10 @@ def test_signal_item_requires_margin_usdt(seeded_config):
         headers=AUTH,
     )
 
-    assert resp.status_code == 422
-    assert "margin_usdt" in resp.text
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["errors"] == 1
+    assert body["details"][0]["action"] == "error"
 
 
 def test_global_config_no_longer_contains_margin_or_strategy_keys(seeded_config):

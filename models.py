@@ -41,22 +41,26 @@ class SignalItem(BaseModel):
         description="方向：'LONG'（做多）或 'SHORT'（做空）",
         pattern="^(LONG|SHORT)$",
     )
-    margin_usdt: float = Field(
-        ...,
+    margin_usdt: Optional[float] = Field(
+        None,
         gt=0,
-        description="本次交易保证金（USDT）",
+        description="本次交易保证金（USDT）；开仓/滚仓必填，平仓/更新止损可为空",
     )
     entry_price: Optional[float] = Field(
         None,
         description="建议入场价（信号触发时的 VWAP 价格）",
     )
-    sl_price: float = Field(
-        ...,
-        description="止损价格（必填）",
+    sl_price: Optional[float] = Field(
+        None,
+        description="止损价格；开仓/滚仓时用于初始保护单，update_sl 时表示新的止损价格",
     )
     tp_price: Optional[float] = Field(
         None,
         description="止盈价格，由 next-k-api 计算后推送。Protocol 不做二次计算",
+    )
+    close_price: Optional[float] = Field(
+        None,
+        description="建议平仓价，仅用于日志记录；实盘按 MARKET 成交",
     )
     confidence: Optional[str] = Field(
         None,

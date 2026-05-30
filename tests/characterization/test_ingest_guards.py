@@ -52,6 +52,7 @@ def test_trading_disabled_skips_all(seeded_config, mock_binance):
 
 
 def test_invalid_source_rejected(seeded_config, mock_binance):
+    mock_binance.all(position_risk="position_risk_closed")
     client = _client(seeded_config)
     resp = client.post(
         "/api/binance/signals/ingest",
