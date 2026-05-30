@@ -168,6 +168,7 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     side = signal["side"]
     source = signal.get("source", "") or ""
     play = signal.get("play", "") or ""
+    action = str(signal.get("action", "") or "").lower()
 
     logger.info("execute_trade: source=%s symbol=%s side=%s play=%s id=%s",
                 source, symbol, side, play, signal_log_id)
@@ -217,6 +218,8 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     entry_type = get_source_config(
         source, "entry_type", get_config("entry_type", "MARKET"),
     ).upper()
+    if source == "moss_quant" and action == "rolling":
+        entry_type = "MARKET"
 
     # Setup: filters + leverage + margin type + hedge mode
     try:

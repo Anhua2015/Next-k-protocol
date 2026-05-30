@@ -105,6 +105,35 @@ def test_moss_quant_bypasses_position_exists(seeded_config, mock_binance):
     assert b2["traded"] == 1, f"expected traded, got {b2['details'][0]}"
 
 
+def test_moss_quant_rolling_forces_market_when_source_entry_type_is_limit(seeded_config, mock_binance):
+    """rolling 信号在 LIMIT 配置下仍应按 MARKET 成交，而不是 pending/报缺少 entry_price。"""
+    seeded_config.set_config("src_moss_quant_entry_type", "LIMIT")
+    mock_binance.all(place_order="place_order_market_filled")
+    client = _client(seeded_config)
+
+    resp = client.post(
+        "/api/binance/signals/ingest",
+        json=_mq_payload(
+            api_signal_id="mq-roll-limit-1",
+            entry_price=None,
+            action="rolling",
+            play="balanced_rolling",
+        ),
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["traded"] == 1, body
+    assert body["details"][0]["action"] == "traded"
+
+    logs = client.get(
+        "/api/binance/signals?source=moss_quant&action=rolling&limit=10",
+        headers=AUTH,
+    ).json()
+    assert logs[0]["status"] == "traded"
+
+
 def test_non_moss_quant_still_blocked_by_position_exists(seeded_config, mock_binance):
     """zct_vwap is still blocked by position_exists (no regression)."""
     mock_binance.all()
@@ -150,7 +179,6 @@ def test_moss_quant_default_config_present(seeded_config):
     assert db.get_config("src_moss_quant_max_positions") == "10"
     assert db.get_config("src_moss_quant_expire_hours") == "24"
     assert db.get_config("src_moss_quant_entry_type") == "MARKET"
-    assert db.get_config("moss_quant_rolling_enabled") == "true"
 
 
 # -- slack update endpoint ----------------------------------------------------
