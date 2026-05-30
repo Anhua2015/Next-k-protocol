@@ -29,6 +29,9 @@ def dispatch(sig: Any, signal_log_id: int) -> Dict[str, Any]:
             "margin_usdt": (
                 float(sig.margin_usdt) if sig.margin_usdt is not None else None
             ),
+            "leverage": (
+                float(sig.leverage) if getattr(sig, "leverage", None) is not None else None
+            ),
             "entry_price": float(sig.entry_price) if sig.entry_price is not None else None,
             "sl_price": float(sig.sl_price) if sig.sl_price is not None else None,
             "tp_price": float(sig.tp_price) if sig.tp_price is not None else None,

@@ -112,6 +112,7 @@ def test_moss_open_signal_log_links_position_and_result(seeded_config, mock_bina
                     "symbol": "BTCUSDT",
                     "side": "LONG",
                     "margin_usdt": 50.0,
+                    "leverage": 8.0,
                     "entry_price": 67250.5,
                     "sl_price": 66500.0,
                     "tp_price": 68500.0,

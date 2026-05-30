@@ -162,13 +162,7 @@ async def get_config():
     - **testnet**: 测试网开关，'true'/'false'
     - **binance_api_key**: 币安 API Key（脱敏显示）
     - **binance_api_secret**: 币安 API Secret（脱敏显示）
-    - **margin_usdt**: 单笔保证金（USDT），实际名义敞口 = 保证金 × 杠杆
-    - **leverage**: 杠杆倍数
     - **max_positions**: 全局最大持仓数
-    - **max_positions_play01/02/03**: 各策略最大持仓数
-    - **position_expire_hours**: 全局持仓过期时限（小时）
-    - **expire_hours_play01/02/03**: 各策略过期时限（小时）
-    - **enabled_sources**: 启用的信号来源，逗号分隔
     """
     cfg = _db.get_all_config()
     masked = {k: ("****" if k in _SENSITIVE_KEYS and v else v) for k, v in cfg.items()}
@@ -189,8 +183,8 @@ async def update_config(body: ConfigUpdate):
     {
       "pairs": {
         "enabled": "true",
-        "margin_usdt": "200",
-        "leverage": "10"
+        "entry_type": "MARKET",
+        "max_positions": "8"
       }
     }
     ```

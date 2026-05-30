@@ -24,6 +24,7 @@ def _payload():
         "source": "zct_vwap", "api_signal_id": "p-001",
         "symbol": "BTCUSDT", "side": "LONG",
         "margin_usdt": 100.0,
+        "leverage": 10.0,
         "entry_price": 67250.5, "sl_price": 66500.0, "tp_price": 68500.0,
         "play": "PLAY01",
     }]}
@@ -48,6 +49,7 @@ def test_tp_skipped_when_no_tp_price(seeded_config, mock_binance):
         "source": "zct_vwap", "api_signal_id": "p-002",
         "symbol": "BTCUSDT", "side": "LONG",
         "margin_usdt": 100.0,
+        "leverage": 10.0,
         "entry_price": 67250.5, "sl_price": 66500.0, "tp_price": None,
         "play": "PLAY01",
     }]}

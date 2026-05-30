@@ -28,6 +28,7 @@ def _payload(**overrides):
         "symbol": "BTCUSDT",
         "side": "LONG",
         "margin_usdt": 100.0,
+        "leverage": 10.0,
         "entry_price": 67000.0,
         "sl_price": 66500.0,
         "tp_price": 68500.0,

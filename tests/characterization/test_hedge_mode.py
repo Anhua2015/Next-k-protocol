@@ -24,6 +24,7 @@ def _payload():
         "source": "zct_vwap", "api_signal_id": "h-001",
         "symbol": "BTCUSDT", "side": "LONG",
         "margin_usdt": 100.0,
+        "leverage": 10.0,
         "entry_price": 67250.5, "sl_price": 66500.0, "tp_price": 68500.0,
         "play": "PLAY01",
     }]}

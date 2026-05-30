@@ -26,6 +26,7 @@ def _payload(**overrides):
         "symbol": "BTCUSDT",
         "side": "LONG",
         "margin_usdt": 100.0,
+        "leverage": 10.0,
         "entry_price": 67250.5,
         "sl_price": 66500.0,
         "tp_price": 68500.0,
@@ -68,11 +69,10 @@ def test_market_entry_short_uses_sell_side(seeded_config, mock_binance):
 def test_market_entry_min_notional_rejection(seeded_config, mock_binance):
     """margin*leverage / mark_px * mark_px < minNotional -> status=error."""
     mock_binance.all(position_risk="position_risk_closed")
-    seeded_config.set_config("leverage", "1")
     client = _client(seeded_config)
     resp = client.post(
         "/api/binance/signals/ingest",
-        json=_payload(margin_usdt=0.01),
+        json=_payload(margin_usdt=0.01, leverage=1.0),
         headers=AUTH,
     )
     body = resp.json()

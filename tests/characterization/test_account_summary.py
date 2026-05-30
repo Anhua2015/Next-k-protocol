@@ -38,5 +38,6 @@ def test_global_config_no_longer_contains_margin_or_strategy_keys(seeded_config)
 
     cfg = db.get_all_config()
     assert "margin_usdt" not in cfg
+    assert "leverage" not in cfg
     assert "src_momentum_enabled" not in cfg
     assert "src_moss_quant_leverage" not in cfg

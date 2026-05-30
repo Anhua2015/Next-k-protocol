@@ -18,7 +18,6 @@ _db_write_lock = threading.RLock()
 DEFAULT_CONFIG: Dict[str, str] = {
     "enabled": "false",
     "testnet": "false",
-    "leverage": "10",
     "entry_type": "MARKET",
     "max_positions": "8",
 }

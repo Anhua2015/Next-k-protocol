@@ -53,7 +53,6 @@ def seeded_config(fresh_db):
     fresh_db.set_config_batch({
         "enabled": "true",
         "testnet": "true",
-        "leverage": "10",
         "entry_type": "MARKET",
         "max_positions": "8",
         "binance_api_key": "test-key",

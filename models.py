@@ -15,9 +15,9 @@ class ConfigUpdate(BaseModel):
 
     pairs: Dict[str, str] = Field(
         ...,
-        description='配置键值对，如 {"enabled": "true", "leverage": "10"}。'
+        description='配置键值对，如 {"enabled": "true", "entry_type": "MARKET"}。'
         "敏感字段（binance_api_key/binance_api_secret）的值会在日志中脱敏。",
-        examples=[{"enabled": "true", "leverage": "10"}],
+        examples=[{"enabled": "true", "entry_type": "MARKET"}],
     )
 
 
@@ -45,6 +45,11 @@ class SignalItem(BaseModel):
         None,
         gt=0,
         description="本次交易保证金（USDT）；开仓/滚仓必填，平仓/更新止损可为空",
+    )
+    leverage: Optional[float] = Field(
+        None,
+        gt=0,
+        description="本次交易杠杆；开仓/滚仓必填，平仓/更新止损可为空",
     )
     entry_price: Optional[float] = Field(
         None,

@@ -28,6 +28,7 @@ def _mq_payload(**overrides):
         "symbol": "BTCUSDT",
         "side": "LONG",
         "margin_usdt": 50.0,
+        "leverage": 8,
         "entry_price": 67250.5,
         "sl_price": 66500.0,
         "tp_price": 68500.0,
@@ -50,6 +51,21 @@ def test_moss_quant_source_accepted(seeded_config, mock_binance):
     assert resp.status_code == 200
     assert resp.json()["traded"] == 1
     assert resp.json()["details"][0]["action"] == "traded"
+
+
+def test_moss_quant_open_requires_explicit_leverage(seeded_config, mock_binance):
+    mock_binance.all(position_risk="position_risk_closed")
+    client = _client(seeded_config)
+
+    resp = client.post(
+        "/api/binance/signals/ingest",
+        json=_mq_payload(api_signal_id="mq-test-no-lev", leverage=None),
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["errors"] == 1
+    assert resp.json()["details"][0]["action"] == "error"
 
 
 def test_moss_quant_rolling_forces_market_when_global_entry_type_is_limit(

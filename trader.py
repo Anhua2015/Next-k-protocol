@@ -340,10 +340,10 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     # Resolve margin/leverage
     try:
         margin = float(signal.get("margin_usdt", 0) or 0)
-        leverage = int(get_config("leverage", "10"))
+        leverage = int(float(signal.get("leverage", 0) or 0))
     except (TypeError, ValueError) as exc:
         logger.error("config parse failed %s: %s", symbol, exc)
-        update_signal_status(signal_log_id, "error", f"bad config: {exc}")
+        update_signal_status(signal_log_id, "error", f"bad signal leverage/margin: {exc}")
         return False
 
     logger.info("execute_trade %s: source=%s margin=%.0f leverage=%d",
