@@ -36,9 +36,6 @@ def guard_invalid_source(sig: Any, _ctx: Any) -> GuardDecision:
 
 
 def guard_source_disabled(sig: Any, ctx: Any) -> GuardDecision:
-    if not ctx.db.source_enabled(sig.source):
-        return GuardDecision(skip=True, reason=f"source={sig.source} disabled",
-                             action="skipped_source_disabled")
     return GuardDecision(skip=False)
 
 
@@ -51,7 +48,7 @@ def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
         symbol=sig.symbol, side=sig.side,
         entry_price=sig.entry_price, sl_price=sig.sl_price, tp_price=sig.tp_price,
         confidence=sig.confidence, regime=sig.regime,
-        notional_usdt=sig.notional_usdt, received_at=now_utc(),
+        notional_usdt=None, received_at=now_utc(),
         play=sig.play or "",
         profile_id=getattr(sig, "profile_id", None),
         client_ref=getattr(sig, "client_ref", None) or "",

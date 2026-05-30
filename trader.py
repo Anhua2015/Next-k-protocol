@@ -50,6 +50,7 @@ from binance.exchange_info import (
 from binance.account import (
     detect_hedge_mode as _hedge_fn,
     get_account_summary as _account_summary_fn,
+    list_live_positions as _list_live_positions_fn,
     get_live_position as _live_pos_fn,
     get_order as _get_order_fn,
     set_leverage as _set_lev_fn,
@@ -129,6 +130,7 @@ def get_mark_price(s):          return _mark_px_fn(_resolve_client(), s)
 def get_symbol_info(s):         return _sym_info_fn(_resolve_client(), s)
 def _detect_hedge_mode():       return _hedge_fn(_resolve_client())
 def get_account_summary():      return _account_summary_fn(_resolve_client())
+def list_live_positions():      return _list_live_positions_fn(_resolve_client())
 def get_live_position(s):       return _live_pos_fn(_resolve_client(), s)
 def get_order(s, oid):          return _get_order_fn(_resolve_client(), s, oid)
 def set_leverage(s, lev):       return _set_lev_fn(_resolve_client(), s, lev)
@@ -174,25 +176,13 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
                 source, symbol, side, play, signal_log_id)
 
     # Resolve margin/leverage
-    if source in ("momentum", "jiezhen"):
-        margin = float(get_source_config(source, "margin_usdt", "100"))
-        leverage = int(get_source_config(source, "leverage", "10"))
-    elif source == "moss_quant":
-        notional = float(signal.get("notional_usdt", 0) or 0)
-        leverage = int(get_source_config(source, "leverage", "10"))
-        if notional <= 0:
-            logger.error("moss_quant signal missing notional_usdt %s", symbol)
-            update_signal_status(signal_log_id, "error", "missing notional_usdt")
-            return False
-        margin = notional / leverage
-    else:
-        try:
-            margin = float(get_config("margin_usdt", "100"))
-            leverage = int(get_config("leverage", "10"))
-        except (TypeError, ValueError) as exc:
-            logger.error("config parse failed %s: %s", symbol, exc)
-            update_signal_status(signal_log_id, "error", f"bad config: {exc}")
-            return False
+    try:
+        margin = float(signal.get("margin_usdt", 0) or 0)
+        leverage = int(get_config("leverage", "10"))
+    except (TypeError, ValueError) as exc:
+        logger.error("config parse failed %s: %s", symbol, exc)
+        update_signal_status(signal_log_id, "error", f"bad config: {exc}")
+        return False
 
     logger.info("execute_trade %s: source=%s margin=%.0f leverage=%d",
                 symbol, source, margin, leverage)
@@ -215,10 +205,8 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
         update_signal_status(signal_log_id, "skipped_disabled", "trading disabled")
         return False
 
-    entry_type = get_source_config(
-        source, "entry_type", get_config("entry_type", "MARKET"),
-    ).upper()
-    if source == "moss_quant" and action == "rolling":
+    entry_type = get_config("entry_type", "MARKET").upper()
+    if action == "rolling":
         entry_type = "MARKET"
 
     # Setup: filters + leverage + margin type + hedge mode

@@ -9,8 +9,7 @@
 - 配置管理：GET/POST /api/binance/config
 - 信号接入：POST /api/binance/signals/ingest
 - 信号日志：GET /api/binance/signals
-- 持仓管理：GET /api/binance/positions、GET /api/binance/positions/{id}
-- PnL 统计：GET /api/binance/pnl/summary
+- 持仓管理：GET /api/binance/positions（实时读取币安当前持仓）
 """
 
 from __future__ import annotations
@@ -29,8 +28,7 @@ from models import (
     AccountSummaryOut,
     ClosePositionRequest,
     ConfigUpdate,
-    PnlSummaryOut,
-    PositionOut,
+    LivePositionOut,
     SignalIngestRequest,
     SignalIngestResult,
     SignalLogOut,
@@ -258,21 +256,7 @@ async def account_summary():
             detail = f"account_summary_failed_upstream_{status_code}"
         raise HTTPException(status_code=502, detail=detail) from exc
 
-    def _int_cfg(key: str, default: str) -> int:
-        try:
-            return int(_db.get_config(key, default))
-        except ValueError:
-            return int(default)
-
-    return {
-        **raw,
-        "moss_quant": {
-            "enabled": _db.get_config("src_moss_quant_enabled", "false").lower() == "true",
-            "leverage": _int_cfg("src_moss_quant_leverage", "10"),
-            "max_positions": _int_cfg("src_moss_quant_max_positions", "10"),
-            "entry_type": _db.get_config("src_moss_quant_entry_type", "MARKET"),
-        },
-    }
+    return raw
 
 
 # ---------------------------------------------------------------------------
@@ -664,96 +648,24 @@ async def update_position_sl(position_id: int, body: UpdateSlRequest):
 
 @router.get(
     "/positions",
-    response_model=List[PositionOut],
+    response_model=List[LivePositionOut],
     summary="查询持仓列表",
-    description="返回持仓记录，支持按状态过滤。需要鉴权。",
+    description="直接返回币安当前非零持仓列表。需要鉴权。",
     dependencies=[Depends(require_auth)],
 )
 async def list_positions(
     status: Optional[str] = Query(
         None,
-        description="持仓状态过滤：'open'（当前持仓）| 'closed'（已平仓）| 不传（全部）",
+        description="仅支持 open；其他历史状态已下线",
     ),
     limit: int = Query(100, ge=1, le=1000, description="每页条数"),
     offset: int = Query(0, ge=0, description="分页偏移量"),
-    source: Optional[str] = Query(None, description="按信号来源过滤"),
-    profile_id: Optional[int] = Query(None, description="按策略 profile_id 过滤"),
 ):
-    """查询持仓列表，包含完整 P&L 明细。
+    """查询当前实时持仓；历史持仓和本地 PnL 汇总已下线。"""
+    if status and status != "open":
+        raise HTTPException(status_code=410, detail="historical_positions_removed")
 
-    返回字段说明：
-    - **entry_price**：入场成交均价（USDT）
-    - **sl_price / tp_price**：止损/止盈触发价格
-    - **quantity**：持仓数量（合约张数）
-    - **pnl_usdt**：已实现盈亏（USDT），正数为盈利
-    - **pnl_pct**：杠杆收益率百分比 = (收益率 × 杠杆 × 100)%
-    - **close_reason**：平仓原因
-      - 'tp'：止盈触发
-      - 'sl'：止损触发
-      - 'expired'：持仓到期自动强平
-      - 'manual'：手动平仓
-      - 'unknown'：未知原因
-    - **expire_at**：持仓过期时间（UTC），到期后由 scheduler 自动强平
-    """
-    if status and status not in ("open", "closed", "pending_entry", "cancelled_pending"):
-        raise HTTPException(status_code=400, detail="status must be 'open' | 'closed' | 'pending_entry' | 'cancelled_pending'")
-    rows = _db.list_positions(
-        status=status,
-        limit=limit,
-        offset=offset,
-        source=source,
-        profile_id=profile_id,
-    )
-    return rows
+    from trader import list_live_positions
 
-
-@router.get(
-    "/positions/{position_id}",
-    response_model=PositionOut,
-    summary="查询单条持仓详情",
-    description="根据持仓 ID 获取完整的持仓记录和 P&L 明细。需要鉴权。",
-    dependencies=[Depends(require_auth)],
-)
-async def get_position(
-    position_id: int = Path(..., description="持仓主键 ID"),
-):
-    """获取单条持仓的完整信息。
-
-    包含入场/平仓价格、SL/TP 价格、PnL 计算详情等。
-    如果持仓不存在返回 404。
-    """
-    pos = _db.get_position_by_id(position_id)
-    if pos is None:
-        raise HTTPException(status_code=404, detail="position_not_found")
-    return pos
-
-
-# ---------------------------------------------------------------------------
-# PnL summary
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/pnl/summary",
-    response_model=PnlSummaryOut,
-    summary="PnL 盈亏汇总",
-    description="返回累计交易统计：总笔数、胜率、累计盈亏、平均盈亏、近 30 日日 P&L。需要鉴权。",
-    dependencies=[Depends(require_auth)],
-)
-async def pnl_summary():
-    """获取完整的盈亏统计汇总。
-
-    P&L 计算公式：
-    - **LONG**: pnl_usdt = qty × (close_price - entry_price)
-    - **SHORT**: pnl_usdt = qty × (entry_price - close_price)
-    - **pnl_pct** = (收益率 × 杠杆 × 100)%
-
-    统计说明：
-    - **total**：已平仓交易总笔数
-    - **wins**：盈利笔数（pnl_usdt > 0）
-    - **losses**：亏损笔数（pnl_usdt <= 0）
-    - **total_pnl**：累计总盈亏（USDT）
-    - **avg_pnl**：平均单笔盈亏（USDT）
-    - **daily**：近 30 天每日 PnL 明细（按 closed_at 日期分组，UTC）
-    """
-    return _db.pnl_summary()
+    rows = list_live_positions()
+    return rows[offset : offset + limit]
