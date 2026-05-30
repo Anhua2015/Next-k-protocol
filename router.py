@@ -399,5 +399,17 @@ async def list_positions(
 
     from trader import list_live_positions
 
-    rows = list_live_positions()
+    try:
+        rows = list_live_positions()
+    except Exception as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        logger.error(
+            "list positions failed: type=%s upstream_status=%s",
+            type(exc).__name__,
+            status_code,
+        )
+        detail = "positions_failed"
+        if status_code:
+            detail = f"positions_failed_upstream_{status_code}"
+        raise HTTPException(status_code=502, detail=detail) from exc
     return rows[offset : offset + limit]

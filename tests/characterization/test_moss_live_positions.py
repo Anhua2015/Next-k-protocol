@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import sys
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -39,6 +40,23 @@ def test_positions_closed_is_gone(seeded_config):
     resp = client.get("/api/binance/positions?status=closed", headers=AUTH)
 
     assert resp.status_code == 410
+
+
+def test_positions_upstream_failure_returns_502(seeded_config, monkeypatch):
+    import trader
+
+    def boom():
+        req = httpx.Request("GET", "https://fapi.binance.com/fapi/v2/positionRisk")
+        resp = httpx.Response(401, request=req)
+        raise httpx.HTTPStatusError("boom", request=req, response=resp)
+
+    monkeypatch.setattr(trader, "list_live_positions", boom)
+    client = _client()
+
+    resp = client.get("/api/binance/positions?status=open", headers=AUTH)
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "positions_failed_upstream_401"
 
 
 def test_pnl_summary_endpoint_removed(seeded_config):
