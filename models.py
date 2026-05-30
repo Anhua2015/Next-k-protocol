@@ -69,6 +69,18 @@ class SignalItem(BaseModel):
         None,
         description="策略子类型标记。ZCT VWAP: PLAY01/PLAY02/PLAY03；动量/接针: 可空",
     )
+    profile_id: Optional[int] = Field(
+        None,
+        description="Moss Quant Profile ID，用于将实仓归属到单个机器人",
+    )
+    client_ref: Optional[str] = Field(
+        None,
+        description="调用方生成的动作引用 ID，用于回填 position 和排查重复调用",
+    )
+    action: Optional[str] = Field(
+        "open",
+        description="动作类型：open / rolling / close / update_sl / exchange_sl / exchange_tp / external_close",
+    )
 
 
 class SignalIngestRequest(BaseModel):
@@ -102,6 +114,8 @@ class UpdateSlRequest(BaseModel):
         ...,
         description="新的止损触发价格",
     )
+    profile_id: Optional[int] = Field(None, description="Moss Quant Profile ID")
+    client_ref: Optional[str] = Field(None, description="调用方动作引用 ID")
 
 
 class ClosePositionRequest(BaseModel):
@@ -136,6 +150,8 @@ class ClosePositionRequest(BaseModel):
         None,
         description="指定平仓的持仓 ID。Moss Quant 同 symbol 多仓时需精确指定",
     )
+    profile_id: Optional[int] = Field(None, description="Moss Quant Profile ID")
+    client_ref: Optional[str] = Field(None, description="调用方动作引用 ID")
 
 
 class PositionOut(BaseModel):
@@ -165,6 +181,8 @@ class PositionOut(BaseModel):
     closed_at: Optional[str] = Field(None, description="平仓时间（UTC ISO8601）")
     pnl_usdt: Optional[float] = Field(None, description="已实现盈亏（USDT），正数为盈利")
     pnl_pct: Optional[float] = Field(None, description="杠杆收益率百分比，公式：(ret × leverage × 100)%")
+    profile_id: Optional[int] = Field(None, description="Moss Quant Profile ID")
+    client_ref: Optional[str] = Field(None, description="调用方动作引用 ID")
 
 
 class SignalLogOut(BaseModel):
@@ -187,6 +205,13 @@ class SignalLogOut(BaseModel):
         description="处理状态：'traded'(已开仓) | 'received'(已收到) | 'error'(错误) | 'skipped_*'(跳过)",
     )
     skip_reason: Optional[str] = Field(None, description="跳过/失败原因")
+    play: Optional[str] = Field(None, description="策略子类型")
+    profile_id: Optional[int] = Field(None, description="Moss Quant Profile ID")
+    client_ref: Optional[str] = Field(None, description="调用方动作引用 ID")
+    action: Optional[str] = Field(None, description="动作类型")
+    position_id: Optional[int] = Field(None, description="关联持仓 ID")
+    payload_json: Optional[str] = Field(None, description="动作请求快照 JSON")
+    result_json: Optional[str] = Field(None, description="动作结果快照 JSON")
 
 
 class DailyPnl(BaseModel):
@@ -205,6 +230,21 @@ class PnlSummaryOut(BaseModel):
     total_pnl: float = Field(..., description="累计总盈亏（USDT）")
     avg_pnl: float = Field(..., description="平均单笔盈亏（USDT）")
     daily: List[DailyPnl] = Field(default_factory=list, description="近 30 日每日 PnL 明细")
+
+
+class MossQuantAccountConfig(BaseModel):
+    enabled: bool = Field(..., description="Moss Quant source 是否启用")
+    leverage: int = Field(..., description="Moss Quant protocol 杠杆")
+    max_positions: int = Field(..., description="Moss Quant 最大持仓数")
+    entry_type: str = Field(..., description="Moss Quant 入场类型")
+
+
+class AccountSummaryOut(BaseModel):
+    asset: str = Field("USDT", description="账户资产")
+    wallet_balance_usdt: float = Field(..., description="USDT 钱包余额")
+    available_balance_usdt: float = Field(..., description="USDT 可用余额")
+    unrealized_pnl_usdt: float = Field(..., description="当前未实现盈亏")
+    moss_quant: MossQuantAccountConfig = Field(..., description="Moss Quant protocol 配置摘要")
 
 
 class StatusOut(BaseModel):

@@ -26,6 +26,7 @@ from auth import require_auth
 from trader import close_position as do_close
 from trader import execute_trade
 from models import (
+    AccountSummaryOut,
     ClosePositionRequest,
     ConfigUpdate,
     PnlSummaryOut,
@@ -51,6 +52,43 @@ _SENSITIVE_KEYS = {"binance_api_key", "binance_api_secret"}
 
 def _now_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _model_payload(body) -> dict:
+    return body.model_dump() if hasattr(body, "model_dump") else body.dict()
+
+
+def _update_sl_event_id(position_id: int) -> str:
+    timestamp_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    return f"update_sl_{position_id}_{timestamp_ms}"
+
+
+def _safe_log_trade_event(**kwargs) -> None:
+    try:
+        _db.log_trade_event(**kwargs)
+    except Exception as exc:
+        logger.warning(
+            "trade event log failed: action=%s source=%s type=%s",
+            kwargs.get("action"), kwargs.get("source"), type(exc).__name__,
+        )
+
+
+def _resolve_moss_close_position_id(body: ClosePositionRequest) -> Optional[int]:
+    if body.position_id:
+        return body.position_id
+    if body.source != "moss_quant" or body.profile_id is None:
+        return None
+    for row in _db.list_positions(
+        source=body.source,
+        profile_id=body.profile_id,
+        limit=200,
+    ):
+        if (
+            row.get("symbol") == body.symbol
+            and row.get("status") in ("open", "pending_entry")
+        ):
+            return int(row["id"])
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +235,46 @@ async def update_config(body: ConfigUpdate):
     return {"ok": True, "updated": list(body.pairs.keys())}
 
 
+@router.get(
+    "/account/summary",
+    response_model=AccountSummaryOut,
+    summary="读取币安合约账户摘要",
+    dependencies=[Depends(require_auth)],
+)
+async def account_summary():
+    from trader import get_account_summary
+
+    try:
+        raw = get_account_summary()
+    except Exception as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        logger.error(
+            "account summary failed: type=%s upstream_status=%s",
+            type(exc).__name__,
+            status_code,
+        )
+        detail = "account_summary_failed"
+        if status_code:
+            detail = f"account_summary_failed_upstream_{status_code}"
+        raise HTTPException(status_code=502, detail=detail) from exc
+
+    def _int_cfg(key: str, default: str) -> int:
+        try:
+            return int(_db.get_config(key, default))
+        except ValueError:
+            return int(default)
+
+    return {
+        **raw,
+        "moss_quant": {
+            "enabled": _db.get_config("src_moss_quant_enabled", "false").lower() == "true",
+            "leverage": _int_cfg("src_moss_quant_leverage", "10"),
+            "max_positions": _int_cfg("src_moss_quant_max_positions", "10"),
+            "entry_type": _db.get_config("src_moss_quant_entry_type", "MARKET"),
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Signal ingest（接收 next-k-api 推送的信号）
 # ---------------------------------------------------------------------------
@@ -309,6 +387,10 @@ async def ingest_signals(body: SignalIngestRequest):
 async def list_signals(
     limit: int = Query(100, ge=1, le=1000, description="每页条数，最大 1000"),
     offset: int = Query(0, ge=0, description="分页偏移量"),
+    source: Optional[str] = Query(None, description="按信号来源过滤"),
+    action: Optional[str] = Query(None, description="按信号动作过滤"),
+    status: Optional[str] = Query(None, description="按处理状态过滤"),
+    profile_id: Optional[int] = Query(None, description="按策略 profile_id 过滤"),
 ):
     """查询信号处理日志。
 
@@ -324,7 +406,14 @@ async def list_signals(
       - 'error'：处理失败（skip_reason 中有详细错误信息）
     - **skip_reason**: 跳过或失败的具体原因
     """
-    rows = _db.list_signals(limit=limit, offset=offset)
+    rows = _db.list_signals(
+        limit=limit,
+        offset=offset,
+        source=source,
+        action=action,
+        status=status,
+        profile_id=profile_id,
+    )
     return rows
 
 
@@ -366,13 +455,28 @@ async def close_position(body: ClosePositionRequest):
     )
 
     try:
+        resolved_position_id = _resolve_moss_close_position_id(body)
         ok = do_close(
             source=body.source,
             symbol=body.symbol,
             side=body.side,
             exit_rule=body.exit_rule,
             close_price=body.close_price,
-            position_id=body.position_id,
+            position_id=resolved_position_id,
+            profile_id=body.profile_id,
+        )
+        _safe_log_trade_event(
+            source=body.source,
+            action="close",
+            symbol=body.symbol,
+            side=body.side,
+            api_signal_id=body.api_signal_id,
+            status="traded" if ok else "error",
+            profile_id=body.profile_id,
+            position_id=resolved_position_id,
+            client_ref=body.client_ref,
+            payload=_model_payload(body),
+            result={"ok": bool(ok), "action": "closed" if ok else "not_found"},
         )
         if ok:
             return {"ok": True, "symbol": body.symbol, "action": "closed"}
@@ -382,6 +486,19 @@ async def close_position(body: ClosePositionRequest):
         raise
     except Exception as exc:
         logger.error("close_position failed %s %s: %s", body.side, body.symbol, exc)
+        _safe_log_trade_event(
+            source=body.source,
+            action="close",
+            symbol=body.symbol,
+            side=body.side,
+            api_signal_id=body.api_signal_id,
+            status="error",
+            profile_id=body.profile_id,
+            position_id=body.position_id,
+            client_ref=body.client_ref,
+            payload=_model_payload(body),
+            result={"ok": False, "error": str(exc)},
+        )
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -421,6 +538,10 @@ async def update_position_sl(position_id: int, body: UpdateSlRequest):
     side = pos["side"]
     old_sl_id = pos.get("sl_order_id")
     qty = pos.get("quantity")
+    profile_id = body.profile_id if body.profile_id is not None else pos.get("profile_id")
+    client_ref = body.client_ref
+    api_signal_id = client_ref or _update_sl_event_id(position_id)
+    source = pos.get("source") or ""
     if not qty:
         raise HTTPException(status_code=400, detail="position has no quantity")
     position_side = side if _db.get_config("hedge_mode", "").lower() == "true" else None
@@ -443,6 +564,20 @@ async def update_position_sl(position_id: int, body: UpdateSlRequest):
             logger.info("update_sl: cancelled old SL %s for pos=%s", old_sl_id, position_id)
         except Exception as exc:
             logger.error("update_sl: cancel old SL %s failed: %s", old_sl_id, exc)
+            _safe_log_trade_event(
+                source=source,
+                action="update_sl",
+                symbol=symbol,
+                side=side,
+                api_signal_id=api_signal_id,
+                status="error",
+                sl_price=new_sl,
+                profile_id=profile_id,
+                position_id=position_id,
+                client_ref=client_ref,
+                payload={"old_sl_order_id": old_sl_id, "new_sl_price": body.new_sl_price},
+                result={"ok": False, "stage": "cancel_old_sl", "error": str(exc)},
+            )
             raise HTTPException(status_code=502, detail=f"cancel old SL failed: {exc}")
 
     # 下新 STOP_MARKET 条件单
@@ -458,6 +593,20 @@ async def update_position_sl(position_id: int, body: UpdateSlRequest):
         new_sl_id = str(new_sl_resp.get("algoId", "") or new_sl_resp.get("orderId", ""))
     except Exception as exc:
         logger.error("update_sl: place new SL failed pos=%s: %s", position_id, exc)
+        _safe_log_trade_event(
+            source=source,
+            action="update_sl",
+            symbol=symbol,
+            side=side,
+            api_signal_id=api_signal_id,
+            status="error",
+            sl_price=new_sl,
+            profile_id=profile_id,
+            position_id=position_id,
+            client_ref=client_ref,
+            payload={"old_sl_order_id": old_sl_id, "new_sl_price": body.new_sl_price},
+            result={"ok": False, "stage": "place_new_sl", "error": str(exc)},
+        )
         raise HTTPException(status_code=500, detail=f"place new SL failed: {exc}")
 
     # 更新数据库（下单成功后才写，保证 DB 与交易所一致）
@@ -470,7 +619,36 @@ async def update_position_sl(position_id: int, body: UpdateSlRequest):
             )
     except Exception as exc:
         logger.error("update_sl: db update failed pos=%s: %s", position_id, exc)
+        _safe_log_trade_event(
+            source=source,
+            action="update_sl",
+            symbol=symbol,
+            side=side,
+            api_signal_id=api_signal_id,
+            status="error",
+            sl_price=new_sl,
+            profile_id=profile_id,
+            position_id=position_id,
+            client_ref=client_ref,
+            payload={"old_sl_order_id": old_sl_id, "new_sl_price": body.new_sl_price},
+            result={"ok": False, "stage": "db_update", "error": str(exc)},
+        )
         raise HTTPException(status_code=500, detail="DB update failed after SL placed")
+
+    _safe_log_trade_event(
+        source=source,
+        action="update_sl",
+        symbol=symbol,
+        side=side,
+        api_signal_id=api_signal_id,
+        status="traded",
+        sl_price=new_sl,
+        profile_id=profile_id,
+        position_id=position_id,
+        client_ref=client_ref,
+        payload={"old_sl_order_id": old_sl_id, "new_sl_price": body.new_sl_price},
+        result={"ok": True, "new_sl_order_id": new_sl_id, "new_sl_price": new_sl},
+    )
 
     logger.info("update_sl: pos=%s symbol=%s old_sl_id=%s new_sl=%.6f new_sl_id=%s",
                 position_id, symbol, old_sl_id, new_sl, new_sl_id)
@@ -498,6 +676,8 @@ async def list_positions(
     ),
     limit: int = Query(100, ge=1, le=1000, description="每页条数"),
     offset: int = Query(0, ge=0, description="分页偏移量"),
+    source: Optional[str] = Query(None, description="按信号来源过滤"),
+    profile_id: Optional[int] = Query(None, description="按策略 profile_id 过滤"),
 ):
     """查询持仓列表，包含完整 P&L 明细。
 
@@ -517,7 +697,13 @@ async def list_positions(
     """
     if status and status not in ("open", "closed", "pending_entry", "cancelled_pending"):
         raise HTTPException(status_code=400, detail="status must be 'open' | 'closed' | 'pending_entry' | 'cancelled_pending'")
-    rows = _db.list_positions(status=status, limit=limit, offset=offset)
+    rows = _db.list_positions(
+        status=status,
+        limit=limit,
+        offset=offset,
+        source=source,
+        profile_id=profile_id,
+    )
     return rows
 
 

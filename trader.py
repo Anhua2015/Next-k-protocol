@@ -49,6 +49,7 @@ from binance.exchange_info import (
 )
 from binance.account import (
     detect_hedge_mode as _hedge_fn,
+    get_account_summary as _account_summary_fn,
     get_live_position as _live_pos_fn,
     get_order as _get_order_fn,
     set_leverage as _set_lev_fn,
@@ -127,6 +128,7 @@ def _get_filters(s):            return _filters_fn(_resolve_client(), s)
 def get_mark_price(s):          return _mark_px_fn(_resolve_client(), s)
 def get_symbol_info(s):         return _sym_info_fn(_resolve_client(), s)
 def _detect_hedge_mode():       return _hedge_fn(_resolve_client())
+def get_account_summary():      return _account_summary_fn(_resolve_client())
 def get_live_position(s):       return _live_pos_fn(_resolve_client(), s)
 def get_order(s, oid):          return _get_order_fn(_resolve_client(), s, oid)
 def set_leverage(s, lev):       return _set_lev_fn(_resolve_client(), s, lev)

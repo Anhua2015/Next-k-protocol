@@ -31,9 +31,18 @@ def dispatch(sig: Any, signal_log_id: int) -> Dict[str, Any]:
             "tp_price": float(sig.tp_price) if sig.tp_price is not None else None,
             "notional_usdt": sig.notional_usdt,
             "play": sig.play or "",
+            "profile_id": sig.profile_id,
+            "client_ref": sig.client_ref or "",
+            "action": sig.action or ("rolling" if "rolling" in (sig.play or "").lower() else "open"),
         }
         ok = execute_trade(signal_dict)
         detail["action"] = "traded" if ok else "error"
+        if ok:
+            import db as _d
+            pos = _d.get_position_by_signal_log_id(signal_log_id)
+            if pos:
+                detail["position_id"] = pos.get("id")
+                detail["status"] = pos.get("status")
         if not ok:
             detail["error"] = "execute_trade returned False"
         return detail

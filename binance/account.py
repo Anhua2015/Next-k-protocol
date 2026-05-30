@@ -63,3 +63,21 @@ def get_live_position(client: BinanceClient, symbol: str) -> Optional[Dict[str, 
 
 def get_order(client: BinanceClient, symbol: str, order_id: str) -> Dict[str, Any]:
     return client.request("GET", "/fapi/v1/order", {"symbol": symbol, "orderId": order_id})
+
+
+def get_account_summary(client: BinanceClient) -> Dict[str, Any]:
+    data = client.request("GET", "/fapi/v2/account")
+    assets = data.get("assets") or []
+    usdt = None
+    for row in assets:
+        if str(row.get("asset") or "").upper() == "USDT":
+            usdt = row
+            break
+    if usdt is None:
+        raise RuntimeError("USDT asset not found in futures account")
+    return {
+        "asset": "USDT",
+        "wallet_balance_usdt": float(usdt.get("walletBalance") or 0),
+        "available_balance_usdt": float(data.get("availableBalance") or usdt.get("availableBalance") or 0),
+        "unrealized_pnl_usdt": float(usdt.get("unrealizedProfit") or data.get("totalUnrealizedProfit") or 0),
+    }

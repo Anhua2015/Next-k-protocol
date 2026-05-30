@@ -12,6 +12,7 @@ logger = logging.getLogger("trading.limit_entry")
 @dataclass
 class LimitEntryResult:
     ok: bool
+    position_id: int = 0
     error: str = ""
 
 
@@ -33,7 +34,7 @@ def open_limit(
     from binance.exchange_info import round_price as _round_price, round_quantity as _round_quantity
     from db import (
         compute_pending_deadline, get_config, get_source_config,
-        insert_pending_position, update_signal_status,
+        insert_pending_position, update_signal_execution, update_signal_status,
     )
     from trader import place_order
 
@@ -82,20 +83,34 @@ def open_limit(
             get_config("limit_entry_timeout_sec", "30"),
         ))
         deadline = compute_pending_deadline(timeout_sec)
-        insert_pending_position(
+        position_id = insert_pending_position(
             signal_log_id=signal_log_id, symbol=symbol, side=side,
             entry_order_id=entry_order_id, entry_price=limit_price,
             sl_price=sl_price, tp_price=tp_price,
             quantity=qty, notional_usdt=signal.get("notional_usdt") or margin, leverage=leverage,
             opened_at=_now_utc(), entry_deadline=deadline,
             play=play, source=source,
+            profile_id=signal.get("profile_id"), client_ref=signal.get("client_ref") or "",
         )
-        update_signal_status(signal_log_id, "pending_entry")
+        update_signal_execution(
+            signal_log_id,
+            status="pending_entry",
+            position_id=position_id,
+            result={
+                "ok": True,
+                "position_id": position_id,
+                "entry_order_id": entry_order_id,
+                "quantity": qty,
+                "entry_price": limit_price,
+                "pending_entry": True,
+                "entry_deadline": deadline,
+            },
+        )
         from observability.metrics import TRADES_OPENED
         TRADES_OPENED.labels(source=source, side=side, entry_type="LIMIT").inc()
         logger.info("LIMIT placed: %s %s qty=%s price=%.6f order=%s",
                     side, symbol, qty, limit_price, entry_order_id)
-        return LimitEntryResult(ok=True)
+        return LimitEntryResult(ok=True, position_id=position_id)
     except Exception as exc:
         logger.error("LIMIT entry %s %s failed: %s", side, symbol, exc)
         update_signal_status(signal_log_id, "error", f"LIMIT entry: {exc}")

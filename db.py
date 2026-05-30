@@ -35,6 +35,8 @@ from repos.config_repo import (
 from repos.signals_repo import (
     insert_signal,
     list_signals,
+    log_trade_event,
+    update_execution as update_signal_execution,
     update_status as update_signal_status,
 )
 
@@ -47,6 +49,7 @@ from repos.positions_repo import (
     get_open_position_for_symbol,
     get_open_positions,
     get_pending_entries,
+    get_position_by_signal_log_id,
     get_position_by_id,
     insert_pending_position,
     insert_position,

@@ -9,6 +9,57 @@ from binance.time_sync import now_utc as _now_utc
 logger = logging.getLogger("lifecycle.close")
 
 
+def _close_event_action(close_reason: str) -> str:
+    return {
+        "tp": "exchange_tp",
+        "sl": "exchange_sl",
+        "external": "external_close",
+        "paper_close": "external_close",
+        "manual": "external_close",
+    }.get(close_reason, "external_close")
+
+
+def _log_closed_position_event(
+    pos: Dict[str, Any],
+    close_reason: str,
+    close_price: Optional[float],
+    pnl_usdt: float,
+    pnl_pct: float,
+) -> None:
+    action = _close_event_action(close_reason)
+    _safe_log_trade_event(
+        source=pos.get("source") or "",
+        action=action,
+        symbol=pos.get("symbol") or "",
+        side=pos.get("side") or "",
+        api_signal_id=f"position_{pos['id']}_{action}",
+        status="closed",
+        skip_reason=close_reason,
+        profile_id=pos.get("profile_id"),
+        position_id=pos.get("id"),
+        client_ref=pos.get("client_ref") or "",
+        payload={"close_reason": close_reason},
+        result={
+            "close_price": close_price,
+            "pnl_usdt": pnl_usdt,
+            "pnl_pct": pnl_pct,
+            "skip_reason": close_reason,
+        },
+    )
+
+
+def _safe_log_trade_event(**kwargs) -> None:
+    from db import log_trade_event
+
+    try:
+        log_trade_event(**kwargs)
+    except Exception as exc:
+        logger.warning(
+            "trade event log failed: action=%s source=%s type=%s",
+            kwargs.get("action"), kwargs.get("source"), type(exc).__name__,
+        )
+
+
 def _record_closed_position(
     pos: Dict[str, Any], close_reason: str, close_price: Optional[float],
 ) -> None:
@@ -25,6 +76,7 @@ def _record_closed_position(
             close_price=close_price or 0.0, closed_at=_now_utc(),
             pnl_usdt=0.0, pnl_pct=0.0,
         )
+        _log_closed_position_event(pos, close_reason, close_price or 0.0, 0.0, 0.0)
         return
 
     if side == "LONG":
@@ -40,6 +92,9 @@ def _record_closed_position(
         close_price=close_price, closed_at=_now_utc(),
         pnl_usdt=round(pnl, 4), pnl_pct=round(pnl_pct, 4),
     )
+    _log_closed_position_event(
+        pos, close_reason, close_price, round(pnl, 4), round(pnl_pct, 4),
+    )
     signal_log_id = pos.get("signal_log_id")
     if signal_log_id:
         update_signal_status(signal_log_id, "closed", close_reason)
@@ -51,16 +106,25 @@ def _record_closed_position(
 
 
 def _get_latest_open_for_symbol_source(
-    symbol: str, source: str,
+    symbol: str, source: str, profile_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
-    """查询指定 symbol+source 的最新 open 持仓（ORDER BY id DESC）。"""
+    """查询指定 symbol+source/profile 的最新 open 持仓（ORDER BY id DESC）。"""
     from repos.connection import get_db
+    clauses = [
+        "status IN ('open','pending_entry')",
+        "symbol=?",
+        "source=?",
+    ]
+    params: list[Any] = [symbol, source]
+    if profile_id is not None:
+        clauses.append("profile_id=?")
+        params.append(profile_id)
     with get_db() as conn:
         row = conn.execute(
             "SELECT * FROM positions "
-            "WHERE status IN ('open','pending_entry') AND symbol=? AND source=? "
+            f"WHERE {' AND '.join(clauses)} "
             "ORDER BY id DESC LIMIT 1",
-            (symbol, source),
+            params,
         ).fetchone()
     return dict(row) if row else None
 
@@ -69,6 +133,7 @@ def close_position(
     source: str, symbol: str, side: str,
     exit_rule: str, close_price: Optional[float] = None,
     position_id: Optional[int] = None,
+    profile_id: Optional[int] = None,
 ) -> bool:
     """平仓：取消 SL/TP 条件单 + MARKET 平仓 + 记录 PnL。"""
     from db import (
@@ -83,14 +148,28 @@ def close_position(
         place_order,
     )
 
-    logger.info("close_position: source=%s symbol=%s side=%s rule=%s close=%s pos_id=%s",
-                source, symbol, side, exit_rule, close_price, position_id)
+    logger.info("close_position: source=%s symbol=%s side=%s rule=%s close=%s pos_id=%s profile_id=%s",
+                source, symbol, side, exit_rule, close_price, position_id, profile_id)
 
     if position_id:
         pos = get_position_by_id(position_id)
+        if (
+            pos is not None
+            and source == "moss_quant"
+            and profile_id is not None
+            and pos.get("profile_id") != profile_id
+        ):
+            logger.warning(
+                "close_position moss profile mismatch: req=%s db=%s pos=%s",
+                profile_id, pos.get("profile_id"), position_id,
+            )
+            return False
     elif source == "moss_quant":
-        # moss_quant 同 symbol 可有多仓（滚仓），取最新 open 持仓
-        pos = _get_latest_open_for_symbol_source(symbol, source)
+        if profile_id is None:
+            logger.warning("close_position moss_quant fallback requires profile_id")
+            return False
+        # moss_quant 同 symbol 可有多仓，fallback 必须按 profile 精确定位。
+        pos = _get_latest_open_for_symbol_source(symbol, source, profile_id=profile_id)
     else:
         pos = get_open_position_for_symbol(symbol)
     if pos is None:

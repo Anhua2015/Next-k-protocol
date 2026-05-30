@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
@@ -44,6 +45,7 @@ def guard_source_disabled(sig: Any, ctx: Any) -> GuardDecision:
 def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
     """去重：insert_signal 返回 None = 已存在。"""
     from binance.time_sync import now_utc
+    payload = sig.model_dump() if hasattr(sig, "model_dump") else sig.dict()
     sid = ctx.db.insert_signal(
         source=sig.source, api_signal_id=sig.api_signal_id,
         symbol=sig.symbol, side=sig.side,
@@ -51,6 +53,12 @@ def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
         confidence=sig.confidence, regime=sig.regime,
         notional_usdt=sig.notional_usdt, received_at=now_utc(),
         play=sig.play or "",
+        profile_id=getattr(sig, "profile_id", None),
+        client_ref=getattr(sig, "client_ref", None) or "",
+        action=getattr(sig, "action", None) or (
+            "rolling" if "rolling" in (sig.play or "").lower() else "open"
+        ),
+        payload_json=json.dumps(payload, ensure_ascii=False, default=str),
     )
     if sid is None:
         return GuardDecision(skip=True, action="duplicate")

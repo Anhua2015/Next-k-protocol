@@ -1,9 +1,11 @@
 """signals_log 表读写。"""
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any, Dict, List, Optional
 
+from binance.time_sync import now_utc
 from repos.connection import get_db
 
 
@@ -22,6 +24,12 @@ def insert_signal(
     status: str = "received",
     skip_reason: Optional[str] = None,
     play: Optional[str] = None,
+    profile_id: Optional[int] = None,
+    client_ref: Optional[str] = "",
+    action: str = "open",
+    position_id: Optional[int] = None,
+    payload_json: Optional[str] = None,
+    result_json: Optional[str] = None,
 ) -> Optional[int]:
     try:
         with get_db(write=True) as conn:
@@ -29,12 +37,14 @@ def insert_signal(
                 """INSERT INTO signals_log
                    (source, api_signal_id, symbol, side, entry_price, sl_price,
                     tp_price, confidence, regime, notional_usdt, received_at,
-                    status, skip_reason, play)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    status, skip_reason, play, profile_id, client_ref, action,
+                    position_id, payload_json, result_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     source, api_signal_id, symbol, side, entry_price, sl_price,
                     tp_price, confidence, regime, notional_usdt, received_at,
-                    status, skip_reason, play,
+                    status, skip_reason, play, profile_id, client_ref or "",
+                    action or "open", position_id, payload_json, result_json,
                 ),
             )
             return cur.lastrowid
@@ -52,18 +62,109 @@ def update_status(
         )
 
 
+def update_execution(
+    signal_id: int,
+    *,
+    status: str,
+    position_id: Optional[int] = None,
+    result: Optional[Dict[str, Any]] = None,
+    payload: Optional[Dict[str, Any]] = None,
+    skip_reason: Optional[str] = None,
+) -> None:
+    assignments = ["status=?"]
+    params: List[Any] = [status]
+    if position_id is not None:
+        assignments.append("position_id=?")
+        params.append(position_id)
+    if result is not None:
+        assignments.append("result_json=?")
+        params.append(json.dumps(result))
+    if payload is not None:
+        assignments.append("payload_json=?")
+        params.append(json.dumps(payload))
+    if skip_reason is not None:
+        assignments.append("skip_reason=?")
+        params.append(skip_reason)
+    params.append(signal_id)
+    with get_db(write=True) as conn:
+        conn.execute(
+            f"UPDATE signals_log SET {', '.join(assignments)} WHERE id=?",
+            params,
+        )
+
+
 def list_signals(
-    limit: int = 100, offset: int = 0, source: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    source: Optional[str] = None,
+    action: Optional[str] = None,
+    status: Optional[str] = None,
+    profile_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
+    filters = []
+    params: List[Any] = []
+    if source:
+        filters.append("source=?")
+        params.append(source)
+    if action:
+        filters.append("action=?")
+        params.append(action)
+    if status:
+        filters.append("status=?")
+        params.append(status)
+    if profile_id is not None:
+        filters.append("profile_id=?")
+        params.append(profile_id)
+
+    where = f" WHERE {' AND '.join(filters)}" if filters else ""
+    params.extend([limit, offset])
     with get_db() as conn:
-        if source:
-            rows = conn.execute(
-                "SELECT * FROM signals_log WHERE source=? ORDER BY id DESC LIMIT ? OFFSET ?",
-                (source, limit, offset),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM signals_log ORDER BY id DESC LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
+        rows = conn.execute(
+            f"SELECT * FROM signals_log{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            params,
+        ).fetchall()
     return [dict(r) for r in rows]
+
+
+def log_trade_event(
+    source: str,
+    action: str,
+    symbol: str,
+    side: str,
+    api_signal_id: str,
+    status: str = "received",
+    profile_id: Optional[int] = None,
+    position_id: Optional[int] = None,
+    client_ref: Optional[str] = "",
+    payload: Optional[Dict[str, Any]] = None,
+    result: Optional[Dict[str, Any]] = None,
+    *,
+    entry_price: Optional[float] = None,
+    sl_price: Optional[float] = None,
+    tp_price: Optional[float] = None,
+    notional_usdt: Optional[float] = None,
+    play: Optional[str] = None,
+    skip_reason: Optional[str] = None,
+) -> Optional[int]:
+    return insert_signal(
+        source=source,
+        api_signal_id=api_signal_id,
+        symbol=symbol,
+        side=side,
+        entry_price=entry_price,
+        sl_price=sl_price,
+        tp_price=tp_price,
+        confidence=None,
+        regime=None,
+        notional_usdt=notional_usdt,
+        received_at=now_utc(),
+        status=status,
+        skip_reason=skip_reason,
+        play=play,
+        profile_id=profile_id,
+        client_ref=client_ref or "",
+        action=action or "open",
+        position_id=position_id,
+        payload_json=json.dumps(payload) if payload is not None else None,
+        result_json=json.dumps(result) if result is not None else None,
+    )
