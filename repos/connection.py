@@ -39,7 +39,6 @@ DEFAULT_CONFIG: Dict[str, str] = {
     "src_moss_quant_max_positions": "10",
     "src_moss_quant_expire_hours": "24",
     "src_moss_quant_entry_type": "MARKET",
-    "moss_quant_rolling_enabled": "true",
     "limit_entry_timeout_sec": "30",
     "zct_limit_entry_timeout_sec": "30",
     "momentum_limit_entry_timeout_sec": "30",

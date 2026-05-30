@@ -179,7 +179,6 @@ def test_moss_quant_default_config_present(seeded_config):
     assert db.get_config("src_moss_quant_max_positions") == "10"
     assert db.get_config("src_moss_quant_expire_hours") == "24"
     assert db.get_config("src_moss_quant_entry_type") == "MARKET"
-    assert db.get_config("moss_quant_rolling_enabled") == "true"
 
 
 # -- slack update endpoint ----------------------------------------------------
