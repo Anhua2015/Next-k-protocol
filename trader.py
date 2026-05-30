@@ -16,21 +16,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from db import (
-    cancel_pending_position,
-    compute_expire_at,
-    compute_pending_deadline,
     get_config,
-    get_open_expired_positions,
-    get_open_position_for_symbol,
-    get_open_positions,
-    get_pending_entries,
-    get_source_config,
-    insert_pending_position,
-    insert_position,
-    promote_pending_to_open,
-    resolve_expire_hours,
     set_config,
-    update_position_closed,
     update_signal_status,
 )
 
@@ -237,12 +224,3 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
 
 
 # -- Lifecycle re-exports (Phase 3) ------------------------------------------
-
-from lifecycle.close import _record_closed_position, close_position  # noqa: E402
-from lifecycle.sync import sync_open_positions                       # noqa: E402
-from lifecycle.reconcile import (                                    # noqa: E402
-    _promote_pending,
-    _reconcile_one_pending,
-    reconcile_pending_entries,
-)
-from lifecycle.expire import expire_open_positions                   # noqa: E402

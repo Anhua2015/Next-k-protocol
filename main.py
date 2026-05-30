@@ -20,8 +20,6 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
-
-from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -34,10 +32,6 @@ logger = logging.getLogger(__name__)
 load_env_oi()
 
 PORT = int(os.environ.get("PORT", 8001))
-EMBED_SCHEDULER = os.getenv("EMBED_SCHEDULER", "1").strip().lower() in (
-    "1", "true", "yes", "on",
-)
-
 # CORS 白名单：通过 PROTOCOL_CORS_ORIGINS 环境变量配置（逗号分隔）。
 # 默认仅允许本地（开发）；生产环境必须配置实际前端域名，例如：
 #   PROTOCOL_CORS_ORIGINS=https://app.example.com,https://staging.example.com
@@ -82,32 +76,15 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Binance HTTP client initialized")
 
-    if EMBED_SCHEDULER:
-        import pytz
-        tz = pytz.timezone("Asia/Shanghai")
-        sch = BackgroundScheduler(timezone=tz)
-        from scheduler import register_jobs
-        register_jobs(sch)
-        sch.start()
-        app.state.scheduler = sch
-        logger.info("Embedded scheduler started (Asia/Shanghai)")
-    else:
-        logger.info("Embedded scheduler disabled (EMBED_SCHEDULER != 1)")
+    logger.info("Lifecycle scheduler removed; execution runs without embedded jobs")
 
     yield
-
-    sch = getattr(app.state, "scheduler", None)
-    if sch is not None:
-        # wait=True 让 scheduler 等正在运行的 job 跑完再退出，避免 promote_pending_to_open
-        # 等关键写操作中途被杀导致 DB 状态不一致。job 都不长（最多几秒），可接受。
-        sch.shutdown(wait=True)
-        app.state.scheduler = None
     logger.info("Next K Protocol shutting down")
 
 
 app = FastAPI(
     title="Next K Protocol",
-    description="币安合约实盘交易 API 服务。接收 ZCT VWAP 信号，自动执行开仓/止损/止盈，管理持仓生命周期。",
+    description="币安合约实盘交易 API 服务。接收交易请求并执行开仓，当前持仓直接读取币安实时数据。",
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs",

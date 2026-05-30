@@ -37,7 +37,7 @@ def open_market(
     """执行 MARKET 市价单入场，返回 MarketEntryResult。"""
     from binance.time_sync import now_utc as _now_utc
     from binance.exchange_info import round_price as _round_price, round_quantity as _round_quantity
-    from db import insert_position, update_signal_execution, update_signal_status
+    from db import update_signal_execution, update_signal_status
     from trader import (
         _emergency_close,
         _place_protective,
@@ -127,31 +127,22 @@ def open_market(
         update_signal_status(signal_log_id, "error", f"SL/TP failed: {exc}")
         return MarketEntryResult(ok=False, error=str(exc))
 
-    position_id = insert_position(
-        signal_log_id=signal_log_id, symbol=symbol, side=side,
-        entry_order_id=entry_order_id, sl_order_id=sl_order_id, tp_order_id=tp_order_id,
-        entry_price=actual_entry, sl_price=final_sl_p, tp_price=final_tp_p,
-        quantity=qty, notional_usdt=margin * leverage, leverage=leverage,
-        opened_at=_now_utc(), play=play, source=source,
-        profile_id=signal.get("profile_id"), client_ref=signal.get("client_ref") or "",
-    )
     update_signal_execution(
         signal_log_id,
         status="traded",
-        position_id=position_id,
         result={
             "ok": True,
-            "position_id": position_id,
             "entry_order_id": entry_order_id,
             "quantity": qty,
             "entry_price": actual_entry,
             "sl_order_id": sl_order_id,
             "tp_order_id": tp_order_id,
+            "notional_usdt": margin * leverage,
         },
     )
     from observability.metrics import TRADES_OPENED
     TRADES_OPENED.labels(source=source, side=side, entry_type="MARKET").inc()
     logger.info("Opened %s %s source=%s qty=%s entry=%.6f sl=%.6f tp=%.6f",
                 side, symbol, source, qty, actual_entry, final_sl_p, final_tp_p)
-    return MarketEntryResult(ok=True, position_id=position_id, qty=qty, entry_price=actual_entry,
+    return MarketEntryResult(ok=True, qty=qty, entry_price=actual_entry,
                              entry_order_id=entry_order_id, position_side=position_side)
