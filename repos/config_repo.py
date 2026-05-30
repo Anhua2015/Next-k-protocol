@@ -11,17 +11,7 @@ def get_config(key: str, default: str = "") -> str:
         row = conn.execute(
             "SELECT value FROM config WHERE key = ?", (key,)
         ).fetchone()
-    val = row["value"] if row else ""
-    if val:
-        return val
-    if key == "margin_usdt":
-        with get_db() as conn:
-            row = conn.execute(
-                "SELECT value FROM config WHERE key = ?", ("position_size_usdt",)
-            ).fetchone()
-        if row and row["value"]:
-            return row["value"]
-    return default
+    return row["value"] if row and row["value"] else default
 
 
 def get_all_config() -> Dict[str, str]:

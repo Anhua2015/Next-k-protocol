@@ -15,9 +15,9 @@ class ConfigUpdate(BaseModel):
 
     pairs: Dict[str, str] = Field(
         ...,
-        description='配置键值对，如 {"enabled": "true", "margin_usdt": "200"}。'
+        description='配置键值对，如 {"enabled": "true", "leverage": "10"}。'
         "敏感字段（binance_api_key/binance_api_secret）的值会在日志中脱敏。",
-        examples=[{"enabled": "true", "margin_usdt": "200"}],
+        examples=[{"enabled": "true", "leverage": "10"}],
     )
 
 
@@ -41,6 +41,11 @@ class SignalItem(BaseModel):
         description="方向：'LONG'（做多）或 'SHORT'（做空）",
         pattern="^(LONG|SHORT)$",
     )
+    margin_usdt: float = Field(
+        ...,
+        gt=0,
+        description="本次交易保证金（USDT）",
+    )
     entry_price: Optional[float] = Field(
         None,
         description="建议入场价（信号触发时的 VWAP 价格）",
@@ -60,10 +65,6 @@ class SignalItem(BaseModel):
     regime: Optional[str] = Field(
         None,
         description="市场状态标记，如 'TREND_UP'、'RANGE'",
-    )
-    notional_usdt: Optional[float] = Field(
-        None,
-        description="名义价值（USDT），如果不传则使用默认保证金×杠杆计算",
     )
     play: Optional[str] = Field(
         None,

@@ -53,18 +53,9 @@ def seeded_config(fresh_db):
     fresh_db.set_config_batch({
         "enabled": "true",
         "testnet": "true",
-        "margin_usdt": "100",
         "leverage": "10",
         "entry_type": "MARKET",
         "max_positions": "8",
-        "max_positions_play01": "5",
-        "max_positions_play02": "5",
-        "max_positions_play03": "5",
-        "src_zct_vwap_enabled": "true",
-        "src_momentum_enabled": "true",
-        "src_jiezhen_enabled": "true",
-        "src_momentum_max_positions": "3",
-        "src_jiezhen_max_positions": "3",
         "binance_api_key": "test-key",
         "binance_api_secret": "test-secret",
     })
