@@ -61,6 +61,41 @@ def get_live_position(client: BinanceClient, symbol: str) -> Optional[Dict[str, 
     return None
 
 
+def list_live_positions(client: BinanceClient) -> list[Dict[str, Any]]:
+    rows = client.request("GET", "/fapi/v2/positionRisk")
+    positions: list[Dict[str, Any]] = []
+    for row in rows:
+        amt = float(row.get("positionAmt") or 0)
+        if amt == 0:
+            continue
+
+        def _opt_float(key: str) -> Optional[float]:
+            raw = row.get(key)
+            if raw in (None, ""):
+                return None
+            return float(raw)
+
+        leverage = _opt_float("leverage")
+        positions.append(
+            {
+                "symbol": row["symbol"],
+                "side": "LONG" if amt > 0 else "SHORT",
+                "quantity": abs(amt),
+                "entry_price": _opt_float("entryPrice"),
+                "mark_price": _opt_float("markPrice"),
+                "unrealized_pnl_usdt": float(
+                    row.get("unRealizedProfit")
+                    or row.get("unrealizedProfit")
+                    or 0
+                ),
+                "leverage": int(leverage) if leverage is not None else None,
+                "liquidation_price": _opt_float("liquidationPrice"),
+                "margin_type": (str(row.get("marginType") or "").upper() or None),
+            }
+        )
+    return positions
+
+
 def get_order(client: BinanceClient, symbol: str, order_id: str) -> Dict[str, Any]:
     return client.request("GET", "/fapi/v1/order", {"symbol": symbol, "orderId": order_id})
 

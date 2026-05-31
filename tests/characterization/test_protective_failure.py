@@ -23,6 +23,8 @@ def _payload():
     return {"signals": [{
         "source": "zct_vwap", "api_signal_id": "p-001",
         "symbol": "BTCUSDT", "side": "LONG",
+        "margin_usdt": 100.0,
+        "leverage": 10.0,
         "entry_price": 67250.5, "sl_price": 66500.0, "tp_price": 68500.0,
         "play": "PLAY01",
     }]}
@@ -30,20 +32,24 @@ def _payload():
 
 def test_sl_placement_fail_triggers_emergency_close(seeded_config, mock_binance):
     """SL/TP placement fails -> cancel_all_orders + emergency MARKET close."""
-    mock_binance.all(place_algo="error_2019_insufficient_margin")
+    mock_binance.all(
+        place_algo="error_2019_insufficient_margin",
+        position_risk="position_risk_closed",
+    )
     mock_binance("place_algo", "error_2019_insufficient_margin", status_code=400)
     client = _client(seeded_config)
     resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
     body = resp.json()
     assert body["errors"] == 1
-    assert len(seeded_config.get_open_positions()) == 0
 
 
 def test_tp_skipped_when_no_tp_price(seeded_config, mock_binance):
-    mock_binance.all()
+    mock_binance.all(position_risk="position_risk_closed")
     payload = {"signals": [{
         "source": "zct_vwap", "api_signal_id": "p-002",
         "symbol": "BTCUSDT", "side": "LONG",
+        "margin_usdt": 100.0,
+        "leverage": 10.0,
         "entry_price": 67250.5, "sl_price": 66500.0, "tp_price": None,
         "play": "PLAY01",
     }]}

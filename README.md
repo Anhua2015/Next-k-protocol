@@ -1,6 +1,6 @@
 # Next K Protocol
 
-币安合约实盘交易 API 服务。从 next-k-api 独立出来的微服务，通过 HTTP 接口接收 ZCT VWAP / 动量 / 接针三种策略的交易信号并自动执行币安合约交易。
+币安合约实盘交易 API 服务。从 next-k-api 独立出来的微服务，通过 HTTP 接口接收交易请求并执行币安合约交易。
 
 ## 1. 项目概述
 
@@ -8,12 +8,11 @@
 
 Next K Protocol 是 Next K 交易系统的**执行层服务**，负责：
 
-- 接收来自 next-k-api 的 ZCT VWAP 交易信号
-- 在币安 Futures 上自动开仓（MARKET 市价单）
+- 接收来自 next-k-api 的开仓请求
+- 在币安 Futures 上执行 MARKET / LIMIT 入场
 - 自动下止损/止盈条件单（STOP_MARKET / TAKE_PROFIT_MARKET）
-- 监控持仓状态，检测 SL/TP 触发并更新数据库
-- 持仓过期自动强平
-- 提供 PnL 盈亏统计和交易历史查询
+- 直接代理币安实时账户摘要与当前持仓列表
+- 记录执行日志与请求结果
 
 ### 与 next-k-api 的关系
 
@@ -27,7 +26,7 @@ Next K Protocol 是 Next K 交易系统的**执行层服务**，负责：
 +---------------------+                    +----------------------+
 ```
 
-next-k-api 负责市场数据分析和信号生成，Next K Protocol 负责信号执行和持仓管理。两者通过 HTTP API 解耦。
+next-k-api 负责市场数据分析和信号生成，Next K Protocol 负责信号执行和实时账户/持仓读取。两者通过 HTTP API 解耦。
 
 ### 架构图
 
@@ -42,8 +41,7 @@ Request Flow:
        +-- /api/binance/status       (auth)
        +-- /api/binance/config       (auth)
        +-- /api/binance/signals/*    (auth)
-       +-- /api/binance/positions/*  (auth)
-       +-- /api/binance/pnl/*        (auth)
+       +-- /api/binance/positions    (auth)
               |
               v
          router.py ------> auth.py (token verification)
@@ -57,10 +55,6 @@ Request Flow:
        |  (fapi.binance.com)
        v
    binance.db (SQLite)
-
-Background Jobs (scheduler.py):
-  sync_open_positions   every 30s  detect SL/TP triggers
-  expire_open_positions every 5min force-close expired positions
 ```
 
 ## 2. 核心功能
@@ -71,22 +65,23 @@ Background Jobs (scheduler.py):
 2. 服务对每条信号进行多道闸门检查（去重、开关、信号源、持仓冲突、仓位上限）
 3. 通过检查的信号调用 `trader.execute_trade()` 执行：
    - MARKET 市价单入场
+   - LIMIT 限价挂单提交
    - STOP_MARKET 条件单止损
    - TAKE_PROFIT_MARKET 条件单止盈
 4. SL/TP 下单失败 -> 紧急 MARKET 平仓，避免裸仓
 
-### 持仓管理
+### 运行特性
 
-- **状态同步**：每 30s 查询币安 API，检测 SL/TP 是否触发
-- **过期强平**：每 5min 检查持仓是否超过 `expire_at`，到期自动 MARKET 平仓
-- **PnL 计算**：平仓时自动计算 USDT 盈亏和杠杆收益率
-- **熔断保护**：连续 20 次 API 鉴权失败自动禁用交易
+- **当前持仓事实源**：`/api/binance/positions` 直接读取币安 `positionRisk`
+- **LIMIT 语义**：提交挂单后不做本地 pending 生命周期托管
+- **执行日志**：`signals_log` 仅记录请求与执行结果
+- **熔断保护**：连续 API 鉴权失败仍会自动禁用交易
 
 ### 配置管理
 
-- 通过 `GET/POST /api/binance/config` 读写配置
-- 环境变量首次初始化后存入 SQLite，后续通过 API 修改
-- 敏感字段（API Key/Secret）在日志和 GET 响应中自动脱敏
+- 通过 `GET/POST /api/binance/config` 读写非敏感交易配置
+- `BINANCE_API_KEY` / `BINANCE_API_SECRET` 仅通过 `.env.oi`、系统环境变量或 Railway 配置
+- `GET /api/binance/config` 不返回凭证，`POST /api/binance/config` 也不接受凭证更新
 
 ## 3. 目录结构
 
@@ -95,9 +90,9 @@ Next-k-protocol/
   main.py           FastAPI entry, lifespan, CORS, route registration
   router.py         API route definitions (/api/binance/*)
   models.py         Pydantic request/response models
-  db.py             SQLite database layer (config, signals_log, positions)
+  db.py             SQLite database layer (config, signals_log)
   trader.py         Binance Futures REST execution layer
-  scheduler.py      Background job registration (sync, expire)
+  scheduler.py      No-op compatibility shim
   auth.py           API auth module (X-Maintenance-Token / Bearer)
   env_loader.py     .env.oi environment variable loader
   railway.json      Railway deployment config
@@ -117,9 +112,8 @@ All env vars can be set via `.env.oi` file or system environment variables.
 |----------|---------|-------------|
 | `PORT` | 8001 | Service port |
 | `PROTOCOL_MAINTENANCE_TOKEN` | (empty) | API auth token. Required in production |
-| `EMBED_SCHEDULER` | 1 | Enable embedded scheduler (1=on) |
-| `BINANCE_API_KEY` | (empty) | Binance API Key |
-| `BINANCE_API_SECRET` | (empty) | Binance API Secret |
+| `BINANCE_API_KEY` | (empty) | Binance API Key（仅环境变量 / Railway） |
+| `BINANCE_API_SECRET` | (empty) | Binance API Secret（仅环境变量 / Railway） |
 | `BINANCE_TESTNET` | false | Use testnet |
 | `BINANCE_MARGIN_USDT` | 100 | Margin per trade (USDT) |
 | `BINANCE_LEVERAGE` | 10 | Leverage multiplier |

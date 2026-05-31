@@ -15,9 +15,9 @@ class ConfigUpdate(BaseModel):
 
     pairs: Dict[str, str] = Field(
         ...,
-        description='配置键值对，如 {"enabled": "true", "margin_usdt": "200"}。'
-        "敏感字段（binance_api_key/binance_api_secret）的值会在日志中脱敏。",
-        examples=[{"enabled": "true", "margin_usdt": "200"}],
+        description='配置键值对，如 {"enabled": "true", "entry_type": "MARKET"}。'
+        "币安 API Key/Secret 不允许通过该接口修改。",
+        examples=[{"enabled": "true", "entry_type": "MARKET"}],
     )
 
 
@@ -41,17 +41,31 @@ class SignalItem(BaseModel):
         description="方向：'LONG'（做多）或 'SHORT'（做空）",
         pattern="^(LONG|SHORT)$",
     )
+    margin_usdt: Optional[float] = Field(
+        None,
+        gt=0,
+        description="本次交易保证金（USDT）；开仓/滚仓必填，平仓/更新止损可为空",
+    )
+    leverage: Optional[float] = Field(
+        None,
+        gt=0,
+        description="本次交易杠杆；开仓/滚仓必填，平仓/更新止损可为空",
+    )
     entry_price: Optional[float] = Field(
         None,
         description="建议入场价（信号触发时的 VWAP 价格）",
     )
-    sl_price: float = Field(
-        ...,
-        description="止损价格（必填）",
+    sl_price: Optional[float] = Field(
+        None,
+        description="止损价格；开仓/滚仓时用于初始保护单，update_sl 时表示新的止损价格",
     )
     tp_price: Optional[float] = Field(
         None,
         description="止盈价格，由 next-k-api 计算后推送。Protocol 不做二次计算",
+    )
+    close_price: Optional[float] = Field(
+        None,
+        description="建议平仓价，仅用于日志记录；实盘按 MARKET 成交",
     )
     confidence: Optional[str] = Field(
         None,
@@ -60,10 +74,6 @@ class SignalItem(BaseModel):
     regime: Optional[str] = Field(
         None,
         description="市场状态标记，如 'TREND_UP'、'RANGE'",
-    )
-    notional_usdt: Optional[float] = Field(
-        None,
-        description="名义价值（USDT），如果不传则使用默认保证金×杠杆计算",
     )
     play: Optional[str] = Field(
         None,
@@ -154,35 +164,18 @@ class ClosePositionRequest(BaseModel):
     client_ref: Optional[str] = Field(None, description="调用方动作引用 ID")
 
 
-class PositionOut(BaseModel):
-    """持仓记录（API 返回）。"""
+class LivePositionOut(BaseModel):
+    """币安实时持仓视图。"""
 
-    id: int = Field(..., description="持仓主键 ID")
-    signal_log_id: Optional[int] = Field(None, description="关联的信号日志 ID")
     symbol: str = Field(..., description="交易对符号")
     side: str = Field(..., description="持仓方向：LONG / SHORT")
-    entry_order_id: Optional[str] = Field(None, description="入场订单 ID（币安 orderId）")
-    sl_order_id: Optional[str] = Field(None, description="止损条件单 ID（币安 algoId）")
-    tp_order_id: Optional[str] = Field(None, description="止盈条件单 ID（币安 algoId）")
-    entry_price: Optional[float] = Field(None, description="入场成交均价（USDT）")
-    sl_price: Optional[float] = Field(None, description="止损触发价格")
-    tp_price: Optional[float] = Field(None, description="止盈触发价格")
-    quantity: Optional[float] = Field(None, description="持仓数量（合约张数）")
-    notional_usdt: Optional[float] = Field(None, description="名义价值（USDT）")
-    leverage: Optional[int] = Field(None, description="杠杆倍数")
-    opened_at: str = Field(..., description="开仓时间（UTC ISO8601）")
-    expire_at: Optional[str] = Field(None, description="持仓过期时间（UTC ISO8601），到期自动平仓")
-    status: str = Field(..., description="持仓状态：'open'（持仓中）| 'closed'（已平仓）")
-    close_reason: Optional[str] = Field(
-        None,
-        description="平仓原因：'tp'(止盈) | 'sl'(止损) | 'expired'(到期) | 'manual'(手动) | 'paper_close'(纸面平仓) | 'external'(外部平仓) | 'unknown'(未知)",
-    )
-    close_price: Optional[float] = Field(None, description="平仓成交均价（USDT）")
-    closed_at: Optional[str] = Field(None, description="平仓时间（UTC ISO8601）")
-    pnl_usdt: Optional[float] = Field(None, description="已实现盈亏（USDT），正数为盈利")
-    pnl_pct: Optional[float] = Field(None, description="杠杆收益率百分比，公式：(ret × leverage × 100)%")
-    profile_id: Optional[int] = Field(None, description="Moss Quant Profile ID")
-    client_ref: Optional[str] = Field(None, description="调用方动作引用 ID")
+    quantity: float = Field(..., description="持仓数量（绝对值）")
+    entry_price: Optional[float] = Field(None, description="开仓均价")
+    mark_price: Optional[float] = Field(None, description="当前标记价格")
+    unrealized_pnl_usdt: float = Field(..., description="当前未实现盈亏")
+    leverage: Optional[int] = Field(None, description="当前仓位杠杆")
+    liquidation_price: Optional[float] = Field(None, description="预估强平价")
+    margin_type: Optional[str] = Field(None, description="保证金模式，如 ISOLATED / CROSSED")
 
 
 class SignalLogOut(BaseModel):
@@ -232,19 +225,11 @@ class PnlSummaryOut(BaseModel):
     daily: List[DailyPnl] = Field(default_factory=list, description="近 30 日每日 PnL 明细")
 
 
-class MossQuantAccountConfig(BaseModel):
-    enabled: bool = Field(..., description="Moss Quant source 是否启用")
-    leverage: int = Field(..., description="Moss Quant protocol 杠杆")
-    max_positions: int = Field(..., description="Moss Quant 最大持仓数")
-    entry_type: str = Field(..., description="Moss Quant 入场类型")
-
-
 class AccountSummaryOut(BaseModel):
     asset: str = Field("USDT", description="账户资产")
     wallet_balance_usdt: float = Field(..., description="USDT 钱包余额")
     available_balance_usdt: float = Field(..., description="USDT 可用余额")
     unrealized_pnl_usdt: float = Field(..., description="当前未实现盈亏")
-    moss_quant: MossQuantAccountConfig = Field(..., description="Moss Quant protocol 配置摘要")
 
 
 class StatusOut(BaseModel):

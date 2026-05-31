@@ -1,54 +1,67 @@
 from __future__ import annotations
 
+import importlib
+import sys
+
+import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.characterization
 
+AUTH = {"X-Maintenance-Token": "test-token"}
 
-def test_position_filters_by_source_profile_and_status(seeded_config):
-    import db
 
-    db.insert_position(
-        signal_log_id=1,
-        symbol="BTCUSDT",
-        side="LONG",
-        entry_order_id="e1",
-        sl_order_id="s1",
-        tp_order_id="t1",
-        entry_price=65000,
-        sl_price=64000,
-        tp_price=68000,
-        quantity=0.01,
-        notional_usdt=650,
-        leverage=10,
-        opened_at="2026-05-29T00:00:00Z",
-        play="balanced",
-        source="moss_quant",
-        profile_id=12,
-        client_ref="moss:12:open:1",
-    )
-    db.insert_position(
-        signal_log_id=2,
-        symbol="ETHUSDT",
-        side="SHORT",
-        entry_order_id="e2",
-        sl_order_id="s2",
-        tp_order_id="t2",
-        entry_price=3000,
-        sl_price=3100,
-        tp_price=2800,
-        quantity=0.1,
-        notional_usdt=300,
-        leverage=10,
-        opened_at="2026-05-29T00:00:00Z",
-        play="",
-        source="momentum",
-        profile_id=None,
-        client_ref="",
-    )
+def _client():
+    for mod in ("main", "router", "trader"):
+        sys.modules.pop(mod, None)
+    import main
 
-    rows = db.list_positions(status="open", source="moss_quant", profile_id=12, limit=50)
-    assert len(rows) == 1
-    assert rows[0]["symbol"] == "BTCUSDT"
-    assert rows[0]["profile_id"] == 12
-    assert rows[0]["client_ref"] == "moss:12:open:1"
+    importlib.reload(main)
+    return TestClient(main.app)
+
+
+def test_positions_open_reads_binance_position_risk(seeded_config, mock_binance):
+    mock_binance.all(position_risk="position_risk_open")
+    client = _client()
+
+    resp = client.get("/api/binance/positions?status=open", headers=AUTH)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body[0]["symbol"] == "BTCUSDT"
+    assert body[0]["side"] == "LONG"
+    assert "profile_id" not in body[0]
+
+
+def test_positions_closed_is_gone(seeded_config):
+    client = _client()
+
+    resp = client.get("/api/binance/positions?status=closed", headers=AUTH)
+
+    assert resp.status_code == 410
+
+
+def test_positions_upstream_failure_returns_502(seeded_config, monkeypatch):
+    import trader
+
+    def boom():
+        req = httpx.Request("GET", "https://fapi.binance.com/fapi/v2/positionRisk")
+        resp = httpx.Response(401, request=req)
+        raise httpx.HTTPStatusError("boom", request=req, response=resp)
+
+    monkeypatch.setattr(trader, "list_live_positions", boom)
+    client = _client()
+
+    resp = client.get("/api/binance/positions?status=open", headers=AUTH)
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "positions_failed_upstream_401"
+
+
+def test_pnl_summary_endpoint_removed(seeded_config):
+    client = _client()
+
+    resp = client.get("/api/binance/pnl/summary", headers=AUTH)
+
+    assert resp.status_code in (404, 410)

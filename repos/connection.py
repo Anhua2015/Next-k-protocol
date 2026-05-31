@@ -18,36 +18,11 @@ _db_write_lock = threading.RLock()
 DEFAULT_CONFIG: Dict[str, str] = {
     "enabled": "false",
     "testnet": "false",
-    "margin_usdt": "100",
-    "leverage": "10",
     "entry_type": "MARKET",
     "max_positions": "8",
-    "max_positions_play01": "5",
-    "max_positions_play02": "5",
-    "max_positions_play03": "5",
-    "zct_vwap_expire_hours": "12",
-    "zct_vwap_play01_expire_hours": "12",
-    "zct_vwap_play02_expire_hours": "12",
-    "zct_vwap_play03_expire_hours": "12",
-    "momentum_expire_hours": "12",
-    "jiezhen_expire_hours": "12",
-    "src_zct_vwap_enabled": "true",
-    "src_momentum_enabled": "true",
-    "src_jiezhen_enabled": "true",
-    "src_moss_quant_enabled": "true",
-    "src_moss_quant_leverage": "10",
-    "src_moss_quant_max_positions": "10",
-    "src_moss_quant_expire_hours": "24",
-    "src_moss_quant_entry_type": "MARKET",
-    "limit_entry_timeout_sec": "30",
-    "zct_limit_entry_timeout_sec": "30",
-    "momentum_limit_entry_timeout_sec": "30",
-    "jiezhen_limit_entry_timeout_sec": "30",
 }
 
 _ENV_TO_CONFIG: Dict[str, str] = {
-    "BINANCE_API_KEY": "binance_api_key",
-    "BINANCE_API_SECRET": "binance_api_secret",
     "BINANCE_TESTNET": "testnet",
 }
 
@@ -56,12 +31,6 @@ _PERF_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_signals_log_status ON signals_log(status)",
     "CREATE INDEX IF NOT EXISTS idx_signals_log_source_action ON signals_log(source, action, status)",
     "CREATE INDEX IF NOT EXISTS idx_signals_log_profile ON signals_log(source, profile_id)",
-    "CREATE INDEX IF NOT EXISTS idx_positions_status_symbol ON positions(status, symbol)",
-    "CREATE INDEX IF NOT EXISTS idx_positions_status_play ON positions(status, play)",
-    "CREATE INDEX IF NOT EXISTS idx_positions_status_source ON positions(status, source)",
-    "CREATE INDEX IF NOT EXISTS idx_positions_source_profile_status ON positions(source, profile_id, status)",
-    "CREATE INDEX IF NOT EXISTS idx_positions_expire_at ON positions(status, expire_at)",
-    "CREATE INDEX IF NOT EXISTS idx_positions_closed_at ON positions(closed_at)",
 ]
 
 DDL = """
@@ -94,35 +63,6 @@ CREATE TABLE IF NOT EXISTS signals_log (
     result_json    TEXT,
     UNIQUE(source, api_signal_id)
 );
-
-CREATE TABLE IF NOT EXISTS positions (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    signal_log_id   INTEGER,
-    symbol          TEXT    NOT NULL,
-    side            TEXT    NOT NULL,
-    entry_order_id  TEXT,
-    sl_order_id     TEXT,
-    tp_order_id     TEXT,
-    entry_price     REAL,
-    sl_price        REAL,
-    tp_price        REAL,
-    quantity        REAL,
-    notional_usdt   REAL,
-    leverage        INTEGER DEFAULT 1,
-    opened_at       TEXT    NOT NULL,
-    expire_at       TEXT,
-    status          TEXT    NOT NULL DEFAULT 'open',
-    close_reason    TEXT,
-    close_price     REAL,
-    closed_at       TEXT,
-    pnl_usdt        REAL,
-    pnl_pct         REAL,
-    play            TEXT    DEFAULT '',
-    source          TEXT    DEFAULT '',
-    entry_deadline  TEXT,
-    profile_id      INTEGER,
-    client_ref      TEXT    DEFAULT ''
-);
 """
 
 
@@ -149,16 +89,6 @@ def get_db(write: bool = False) -> Generator[sqlite3.Connection, None, None]:
 def init_db() -> None:
     with get_db(write=True) as conn:
         conn.executescript(DDL)
-        try:
-            conn.execute("ALTER TABLE positions ADD COLUMN source TEXT")
-            logger.info("migrated: positions.source column added")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE positions ADD COLUMN entry_deadline TEXT")
-            logger.info("migrated: positions.entry_deadline column added")
-        except Exception:
-            pass
         for table, column, ddl in [
             ("signals_log", "profile_id", "ALTER TABLE signals_log ADD COLUMN profile_id INTEGER"),
             ("signals_log", "client_ref", "ALTER TABLE signals_log ADD COLUMN client_ref TEXT DEFAULT ''"),
@@ -166,8 +96,6 @@ def init_db() -> None:
             ("signals_log", "position_id", "ALTER TABLE signals_log ADD COLUMN position_id INTEGER"),
             ("signals_log", "payload_json", "ALTER TABLE signals_log ADD COLUMN payload_json TEXT"),
             ("signals_log", "result_json", "ALTER TABLE signals_log ADD COLUMN result_json TEXT"),
-            ("positions", "profile_id", "ALTER TABLE positions ADD COLUMN profile_id INTEGER"),
-            ("positions", "client_ref", "ALTER TABLE positions ADD COLUMN client_ref TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(ddl)

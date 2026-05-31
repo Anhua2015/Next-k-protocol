@@ -16,21 +16,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from db import (
-    cancel_pending_position,
-    compute_expire_at,
-    compute_pending_deadline,
     get_config,
-    get_open_expired_positions,
-    get_open_position_for_symbol,
-    get_open_positions,
-    get_pending_entries,
-    get_source_config,
-    insert_pending_position,
-    insert_position,
-    promote_pending_to_open,
-    resolve_expire_hours,
     set_config,
-    update_position_closed,
     update_signal_status,
 )
 
@@ -50,6 +37,7 @@ from binance.exchange_info import (
 from binance.account import (
     detect_hedge_mode as _hedge_fn,
     get_account_summary as _account_summary_fn,
+    list_live_positions as _list_live_positions_fn,
     get_live_position as _live_pos_fn,
     get_order as _get_order_fn,
     set_leverage as _set_lev_fn,
@@ -129,6 +117,7 @@ def get_mark_price(s):          return _mark_px_fn(_resolve_client(), s)
 def get_symbol_info(s):         return _sym_info_fn(_resolve_client(), s)
 def _detect_hedge_mode():       return _hedge_fn(_resolve_client())
 def get_account_summary():      return _account_summary_fn(_resolve_client())
+def list_live_positions():      return _list_live_positions_fn(_resolve_client())
 def get_live_position(s):       return _live_pos_fn(_resolve_client(), s)
 def get_order(s, oid):          return _get_order_fn(_resolve_client(), s, oid)
 def set_leverage(s, lev):       return _set_lev_fn(_resolve_client(), s, lev)
@@ -156,6 +145,176 @@ def _place_protective(s, cs, sp, q, ps, ts, k):
     return place_algo_order(_build_protective(s, cs, sp, q, ps, k))
 
 
+def _position_side_for_live_pos(pos: Dict[str, Any], hedge_mode: bool) -> Optional[str]:
+    if not hedge_mode:
+        return None
+    raw = str(pos.get("positionSide") or "").upper()
+    return raw or None
+
+
+def _cancel_open_sl_orders(symbol: str) -> None:
+    for order in get_open_algo_orders(symbol):
+        order_type = str(
+            order.get("type")
+            or order.get("origType")
+            or order.get("algoType")
+            or ""
+        ).upper()
+        if "STOP" not in order_type or "TAKE_PROFIT" in order_type:
+            continue
+        algo_id = order.get("algoId") or order.get("clientAlgoId")
+        if algo_id:
+            cancel_algo_order(str(algo_id))
+
+
+def _close_live_position(signal: Dict[str, Any]) -> bool:
+    signal_log_id = signal["signal_log_id"]
+    symbol = signal["symbol"]
+    requested_side = str(signal["side"]).upper()
+    source = signal.get("source", "") or ""
+
+    live_pos = get_live_position(symbol)
+    if not live_pos:
+        update_signal_status(signal_log_id, "error", "live_position_missing")
+        return False
+
+    amt = float(live_pos.get("positionAmt") or 0)
+    if amt == 0:
+        update_signal_status(signal_log_id, "error", "live_position_missing")
+        return False
+
+    actual_side = "LONG" if amt > 0 else "SHORT"
+    if requested_side != actual_side:
+        update_signal_status(
+            signal_log_id,
+            "error",
+            f"side_mismatch:{requested_side}->{actual_side}",
+        )
+        return False
+
+    hedge_mode = _detect_hedge_mode()
+    position_side = _position_side_for_live_pos(live_pos, hedge_mode)
+    qty = abs(amt)
+
+    try:
+        cancel_all_orders(symbol)
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": "SELL" if actual_side == "LONG" else "BUY",
+            "type": "MARKET",
+            "quantity": qty,
+            "reduceOnly": "true",
+        }
+        if position_side:
+            params["positionSide"] = position_side
+            params.pop("reduceOnly", None)
+        resp = place_order(params)
+    except Exception as exc:
+        logger.error("close live position failed %s %s: %s", actual_side, symbol, exc)
+        update_signal_status(signal_log_id, "error", f"close_failed: {exc}")
+        return False
+
+    update_signal_status(signal_log_id, "traded", None)
+    from repos.signals_repo import update_execution
+
+    update_execution(
+        signal_log_id,
+        status="traded",
+        result={
+            "source": source,
+            "action": "close",
+            "symbol": symbol,
+            "side": actual_side,
+            "quantity": qty,
+            "close_price": signal.get("close_price"),
+            "order": resp,
+        },
+        payload={
+            "symbol": symbol,
+            "side": requested_side,
+            "close_price": signal.get("close_price"),
+            "client_ref": signal.get("client_ref") or "",
+        },
+    )
+    return True
+
+
+def _update_live_stop_loss(signal: Dict[str, Any]) -> bool:
+    signal_log_id = signal["signal_log_id"]
+    symbol = signal["symbol"]
+    side = str(signal["side"]).upper()
+    new_sl_price = signal.get("sl_price")
+    if new_sl_price is None:
+        update_signal_status(signal_log_id, "error", "missing_sl_price")
+        return False
+
+    live_pos = get_live_position(symbol)
+    if not live_pos:
+        update_signal_status(signal_log_id, "error", "live_position_missing")
+        return False
+
+    amt = float(live_pos.get("positionAmt") or 0)
+    if amt == 0:
+        update_signal_status(signal_log_id, "error", "live_position_missing")
+        return False
+
+    actual_side = "LONG" if amt > 0 else "SHORT"
+    if side != actual_side:
+        update_signal_status(
+            signal_log_id,
+            "error",
+            f"side_mismatch:{side}->{actual_side}",
+        )
+        return False
+
+    hedge_mode = _detect_hedge_mode()
+    position_side = _position_side_for_live_pos(live_pos, hedge_mode)
+    qty = abs(amt)
+    mark_px = float(live_pos.get("markPrice") or get_mark_price(symbol) or 0)
+    close_side = "SELL" if actual_side == "LONG" else "BUY"
+    try:
+        step_size, tick_size, _min_notional = _get_filters(symbol)
+        _validate_sl_distance(actual_side, float(new_sl_price), mark_px, tick_size)
+        _cancel_open_sl_orders(symbol)
+        resp = _place_protective(
+            symbol,
+            close_side,
+            _round_price(float(new_sl_price), tick_size),
+            _round_quantity(qty, step_size),
+            position_side,
+            tick_size,
+            "SL",
+        )
+    except Exception as exc:
+        logger.error("update live stop failed %s %s: %s", actual_side, symbol, exc)
+        update_signal_status(signal_log_id, "error", f"update_sl_failed: {exc}")
+        return False
+
+    update_signal_status(signal_log_id, "traded", None)
+    from repos.signals_repo import update_execution
+
+    update_execution(
+        signal_log_id,
+        status="traded",
+        result={
+            "action": "update_sl",
+            "symbol": symbol,
+            "side": actual_side,
+            "quantity": qty,
+            "mark_price": mark_px,
+            "new_sl_price": float(new_sl_price),
+            "sl_order": resp,
+        },
+        payload={
+            "symbol": symbol,
+            "side": side,
+            "new_sl_price": float(new_sl_price),
+            "client_ref": signal.get("client_ref") or "",
+        },
+    )
+    return True
+
+
 # -- execute_trade (Phase 4: orchestrator, delegates to trading/) ------------
 
 def execute_trade(signal: Dict[str, Any]) -> bool:
@@ -173,26 +332,19 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     logger.info("execute_trade: source=%s symbol=%s side=%s play=%s id=%s",
                 source, symbol, side, play, signal_log_id)
 
+    if action == "close":
+        return _close_live_position(signal)
+    if action == "update_sl":
+        return _update_live_stop_loss(signal)
+
     # Resolve margin/leverage
-    if source in ("momentum", "jiezhen"):
-        margin = float(get_source_config(source, "margin_usdt", "100"))
-        leverage = int(get_source_config(source, "leverage", "10"))
-    elif source == "moss_quant":
-        notional = float(signal.get("notional_usdt", 0) or 0)
-        leverage = int(get_source_config(source, "leverage", "10"))
-        if notional <= 0:
-            logger.error("moss_quant signal missing notional_usdt %s", symbol)
-            update_signal_status(signal_log_id, "error", "missing notional_usdt")
-            return False
-        margin = notional / leverage
-    else:
-        try:
-            margin = float(get_config("margin_usdt", "100"))
-            leverage = int(get_config("leverage", "10"))
-        except (TypeError, ValueError) as exc:
-            logger.error("config parse failed %s: %s", symbol, exc)
-            update_signal_status(signal_log_id, "error", f"bad config: {exc}")
-            return False
+    try:
+        margin = float(signal.get("margin_usdt", 0) or 0)
+        leverage = int(float(signal.get("leverage", 0) or 0))
+    except (TypeError, ValueError) as exc:
+        logger.error("config parse failed %s: %s", symbol, exc)
+        update_signal_status(signal_log_id, "error", f"bad signal leverage/margin: {exc}")
+        return False
 
     logger.info("execute_trade %s: source=%s margin=%.0f leverage=%d",
                 symbol, source, margin, leverage)
@@ -215,10 +367,8 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
         update_signal_status(signal_log_id, "skipped_disabled", "trading disabled")
         return False
 
-    entry_type = get_source_config(
-        source, "entry_type", get_config("entry_type", "MARKET"),
-    ).upper()
-    if source == "moss_quant" and action == "rolling":
+    entry_type = get_config("entry_type", "MARKET").upper()
+    if action == "rolling":
         entry_type = "MARKET"
 
     # Setup: filters + leverage + margin type + hedge mode
@@ -249,12 +399,3 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
 
 
 # -- Lifecycle re-exports (Phase 3) ------------------------------------------
-
-from lifecycle.close import _record_closed_position, close_position  # noqa: E402
-from lifecycle.sync import sync_open_positions                       # noqa: E402
-from lifecycle.reconcile import (                                    # noqa: E402
-    _promote_pending,
-    _reconcile_one_pending,
-    reconcile_pending_entries,
-)
-from lifecycle.expire import expire_open_positions                   # noqa: E402

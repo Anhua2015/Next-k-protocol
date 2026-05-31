@@ -22,6 +22,8 @@ def _env_baseline(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("PROTOCOL_MAINTENANCE_TOKEN", "test-token")
     monkeypatch.setenv("BINANCE_TESTNET", "true")
+    monkeypatch.setenv("BINANCE_API_KEY", "test-key")
+    monkeypatch.setenv("BINANCE_API_SECRET", "test-secret")
     monkeypatch.setenv("EMBED_SCHEDULER", "0")
     monkeypatch.delenv("PROTOCOL_CORS_ORIGINS", raising=False)
     # Unset system proxy vars so httpx.Client() doesn't try SOCKS
@@ -53,20 +55,8 @@ def seeded_config(fresh_db):
     fresh_db.set_config_batch({
         "enabled": "true",
         "testnet": "true",
-        "margin_usdt": "100",
-        "leverage": "10",
         "entry_type": "MARKET",
         "max_positions": "8",
-        "max_positions_play01": "5",
-        "max_positions_play02": "5",
-        "max_positions_play03": "5",
-        "src_zct_vwap_enabled": "true",
-        "src_momentum_enabled": "true",
-        "src_jiezhen_enabled": "true",
-        "src_momentum_max_positions": "3",
-        "src_jiezhen_max_positions": "3",
-        "binance_api_key": "test-key",
-        "binance_api_secret": "test-secret",
     })
     # Init/reset the binance HTTP client (Phase 1 lazy singleton)
     import sys
@@ -89,8 +79,8 @@ def seeded_config(fresh_db):
             if _cfg("testnet", "false").lower() == "true"
             else "https://fapi.binance.com"
         ),
-        api_key_fn=lambda: _cfg("binance_api_key", ""),
-        secret_fn=lambda: _cfg("binance_api_secret", ""),
+        api_key_fn=lambda: "test-key",
+        secret_fn=lambda: "test-secret",
     )
     # Clear caches that persist across test DB reloads
     _bacct._hedge_mode_cache = None

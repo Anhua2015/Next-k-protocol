@@ -23,6 +23,8 @@ def _payload():
     return {"signals": [{
         "source": "zct_vwap", "api_signal_id": "v-001",
         "symbol": "BTCUSDT", "side": "LONG",
+        "margin_usdt": 100.0,
+        "leverage": 10.0,
         "entry_price": 67250.5,
         "sl_price": 67250.0,
         "tp_price": 68500.0, "play": "PLAY01",
@@ -40,17 +42,16 @@ def test_sl_distance_too_close_warns_but_continues(
 
 
 def test_min_notional_below_threshold_returns_error(seeded_config, mock_binance):
-    """notional < minNotional -> status=error, no position row."""
-    seeded_config.set_config("margin_usdt", "0.0001")
-    seeded_config.set_config("leverage", "1")
-    mock_binance.all()
+    """notional < minNotional -> status=error."""
+    mock_binance.all(position_risk="position_risk_closed")
     client = _client(seeded_config)
     payload = {"signals": [{
         "source": "zct_vwap", "api_signal_id": "v-002",
         "symbol": "BTCUSDT", "side": "LONG",
+        "margin_usdt": 0.0001,
+        "leverage": 1.0,
         "entry_price": 67250.5, "sl_price": 66500.0, "tp_price": 68500.0,
         "play": "PLAY01",
     }]}
     resp = client.post("/api/binance/signals/ingest", json=payload, headers=AUTH)
     assert resp.json()["errors"] == 1
-    assert len(seeded_config.get_open_positions()) == 0

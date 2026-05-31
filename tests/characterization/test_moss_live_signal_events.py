@@ -100,7 +100,7 @@ def test_moss_open_signal_log_links_position_and_result(seeded_config, mock_bina
 
     importlib.reload(main)
     client = TestClient(main.app)
-    mock_binance.all()
+    mock_binance.all(position_risk="position_risk_closed")
 
     resp = client.post(
         "/api/binance/signals/ingest",
@@ -111,10 +111,11 @@ def test_moss_open_signal_log_links_position_and_result(seeded_config, mock_bina
                     "api_signal_id": "moss:12:open:1",
                     "symbol": "BTCUSDT",
                     "side": "LONG",
+                    "margin_usdt": 50.0,
+                    "leverage": 8.0,
                     "entry_price": 67250.5,
                     "sl_price": 66500.0,
                     "tp_price": 68500.0,
-                    "notional_usdt": 500.0,
                     "play": "balanced",
                     "profile_id": 12,
                     "client_ref": "moss:12:open:1",
@@ -128,13 +129,12 @@ def test_moss_open_signal_log_links_position_and_result(seeded_config, mock_bina
     assert resp.status_code == 200
     body = resp.json()
     assert body["traded"] == 1
-    position_id = body["details"][0]["position_id"]
 
     import db
 
     rows = db.list_signals(source="moss_quant", action="open", profile_id=12, limit=10)
-    assert rows[0]["position_id"] == position_id
+    assert rows[0]["position_id"] is None
     assert json.loads(rows[0]["payload_json"])["client_ref"] == "moss:12:open:1"
     result = json.loads(rows[0]["result_json"])
     assert result["ok"] is True
-    assert result["position_id"] == position_id
+    assert result["entry_order_id"]

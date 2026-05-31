@@ -23,13 +23,15 @@ def _payload():
     return {"signals": [{
         "source": "zct_vwap", "api_signal_id": "h-001",
         "symbol": "BTCUSDT", "side": "LONG",
+        "margin_usdt": 100.0,
+        "leverage": 10.0,
         "entry_price": 67250.5, "sl_price": 66500.0, "tp_price": 68500.0,
         "play": "PLAY01",
     }]}
 
 
 def test_hedge_mode_includes_position_side(seeded_config, mock_binance, httpx_mock):
-    mock_binance.all(position_side="position_side_dual")
+    mock_binance.all(position_side="position_side_dual", position_risk="position_risk_closed")
     client = _client(seeded_config)
     resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
     assert resp.json()["traded"] == 1
@@ -41,7 +43,7 @@ def test_hedge_mode_includes_position_side(seeded_config, mock_binance, httpx_mo
 
 
 def test_one_way_mode_omits_position_side(seeded_config, mock_binance, httpx_mock):
-    mock_binance.all(position_side="position_side_single")
+    mock_binance.all(position_side="position_side_single", position_risk="position_risk_closed")
     client = _client(seeded_config)
     resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
     assert resp.json()["traded"] == 1

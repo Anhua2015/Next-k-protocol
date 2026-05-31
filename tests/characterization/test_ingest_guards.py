@@ -29,6 +29,8 @@ def _payload(**overrides):
         "api_signal_id": "sig-001",
         "symbol": "BTCUSDT",
         "side": "LONG",
+        "margin_usdt": 100.0,
+        "leverage": 10.0,
         "entry_price": 67250.5,
         "sl_price": 66500.0,
         "tp_price": 68500.0,
@@ -51,6 +53,7 @@ def test_trading_disabled_skips_all(seeded_config, mock_binance):
 
 
 def test_invalid_source_rejected(seeded_config, mock_binance):
+    mock_binance.all(position_risk="position_risk_closed")
     client = _client(seeded_config)
     resp = client.post(
         "/api/binance/signals/ingest",
@@ -62,7 +65,7 @@ def test_invalid_source_rejected(seeded_config, mock_binance):
 
 
 def test_duplicate_signal_skipped(seeded_config, mock_binance):
-    mock_binance.all()
+    mock_binance.all(position_risk="position_risk_closed")
     client = _client(seeded_config)
     client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
     resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
@@ -70,23 +73,9 @@ def test_duplicate_signal_skipped(seeded_config, mock_binance):
     assert body["details"][0]["action"] == "duplicate"
 
 
-def test_source_disabled_skipped(seeded_config, mock_binance):
-    seeded_config.set_config("src_momentum_enabled", "false")
-    client = _client(seeded_config)
-    resp = client.post(
-        "/api/binance/signals/ingest",
-        json=_payload(source="momentum", api_signal_id="sig-003"),
-        headers=AUTH,
-    )
-    body = resp.json()
-    assert body["details"][0]["action"] == "skipped_source_disabled"
-
-
 def test_position_conflict_skipped(seeded_config, mock_binance):
-    """Open BTC, then send another BTC signal — second one skipped."""
-    mock_binance.all()
+    mock_binance.all(position_risk="position_risk_open")
     client = _client(seeded_config)
-    client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
     resp = client.post(
         "/api/binance/signals/ingest",
         json=_payload(api_signal_id="sig-004"),
@@ -95,18 +84,9 @@ def test_position_conflict_skipped(seeded_config, mock_binance):
     body = resp.json()
     assert body["details"][0]["action"] == "skipped_position_exists"
 
-
-def test_play_max_positions_skipped(seeded_config, mock_binance):
-    seeded_config.set_config("max_positions_play01", "0")
-    client = _client(seeded_config)
-    resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
-    body = resp.json()
-    assert body["details"][0]["action"] == "skipped_max_positions"
-
-
 def test_global_max_positions_skipped(seeded_config, mock_binance):
     seeded_config.set_config("max_positions", "0")
-    seeded_config.set_config("max_positions_play01", "999")
+    mock_binance.all(position_risk="position_risk_closed")
     client = _client(seeded_config)
     resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
     body = resp.json()

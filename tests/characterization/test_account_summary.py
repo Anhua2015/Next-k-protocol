@@ -7,34 +7,63 @@ pytestmark = pytest.mark.characterization
 AUTH = {"X-Maintenance-Token": "test-token"}
 
 
-def test_account_summary_route_returns_usdt_and_moss_config(seeded_config, monkeypatch):
+def test_open_signal_without_margin_is_rejected_at_execution(seeded_config, mock_binance):
     import main
-    import trader
-    import db
 
-    db.set_config("src_moss_quant_leverage", "7")
-    db.set_config("src_moss_quant_max_positions", "4")
-    db.set_config("src_moss_quant_entry_type", "MARKET")
-    db.set_config("src_moss_quant_enabled", "true")
-
-    monkeypatch.setattr(
-        trader,
-        "get_account_summary",
-        lambda: {
-            "asset": "USDT",
-            "wallet_balance_usdt": 1000.5,
-            "available_balance_usdt": 800.25,
-            "unrealized_pnl_usdt": 12.5,
-        },
-    )
-
+    mock_binance.all(position_risk="position_risk_closed")
     client = TestClient(main.app)
-    resp = client.get("/api/binance/account/summary", headers=AUTH)
+    resp = client.post(
+        "/api/binance/signals/ingest",
+        json={
+            "signals": [
+                {
+                    "api_signal_id": "sig-1",
+                    "symbol": "BTCUSDT",
+                    "side": "LONG",
+                    "sl_price": 65000.0,
+                }
+            ]
+        },
+        headers=AUTH,
+    )
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["wallet_balance_usdt"] == 1000.5
-    assert body["available_balance_usdt"] == 800.25
-    assert body["unrealized_pnl_usdt"] == 12.5
-    assert body["moss_quant"]["leverage"] == 7
-    assert body["moss_quant"]["enabled"] is True
+    assert body["errors"] == 1
+    assert body["details"][0]["action"] == "error"
+
+
+def test_global_config_no_longer_contains_margin_or_strategy_keys(seeded_config):
+    import db
+
+    cfg = db.get_all_config()
+    assert "margin_usdt" not in cfg
+    assert "leverage" not in cfg
+    assert "src_momentum_enabled" not in cfg
+    assert "src_moss_quant_leverage" not in cfg
+
+
+def test_config_endpoint_omits_binance_credentials(seeded_config):
+    import main
+
+    client = TestClient(main.app)
+    resp = client.get("/api/binance/config", headers=AUTH)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "binance_api_key" not in body
+    assert "binance_api_secret" not in body
+
+
+def test_config_endpoint_rejects_binance_credentials_updates(seeded_config):
+    import main
+
+    client = TestClient(main.app)
+    resp = client.post(
+        "/api/binance/config",
+        json={"pairs": {"binance_api_key": "new-key"}},
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "binance_credentials_env_only"
