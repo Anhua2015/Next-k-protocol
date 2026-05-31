@@ -1,6 +1,0 @@
-# Pin Python for reproducible Railway/Nixpacks builds.
-[variables]
-NIXPACKS_PYTHON_VERSION = "3.12"
-
-[phases.install]
-cmds = ["pip install -r requirements.txt"]
