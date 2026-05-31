@@ -62,8 +62,19 @@ def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
     return GuardDecision(skip=False, signal_log_id=sid)
 
 
+def _signal_action(sig: Any) -> str:
+    action = str(getattr(sig, "action", "") or "").lower()
+    if action:
+        return action
+    play = str(getattr(sig, "play", "") or "").lower()
+    return "rolling" if "rolling" in play else "open"
+
+
 def guard_position_exists(sig: Any, ctx: Any) -> GuardDecision:
     from trader import list_live_positions
+
+    if _signal_action(sig) != "open":
+        return GuardDecision(skip=False)
 
     for pos in list_live_positions():
         if pos.get("symbol") == sig.symbol:
@@ -78,6 +89,9 @@ def guard_position_exists(sig: Any, ctx: Any) -> GuardDecision:
 def guard_max_positions(sig: Any, ctx: Any) -> GuardDecision:
     """仅按全局最大持仓数检查。"""
     from trader import list_live_positions
+
+    if _signal_action(sig) != "open":
+        return GuardDecision(skip=False)
 
     max_pos = ctx.max_pos
     if len(list_live_positions()) >= max_pos:
