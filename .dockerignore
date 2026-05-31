@@ -1,0 +1,17 @@
+.git
+.gitignore
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+logs
+.pid
+*.md
+docs
+tests
+.env.oi
+.env.oi.example
+stop.sh
+start.sh
