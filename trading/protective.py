@@ -107,3 +107,20 @@ def validate_sl_distance(
     if side == "SHORT" and sl_price <= mark_px + margin:
         raise ValueError(
             f"SL {sl_price} too close to mark {mark_px} (need >= {mark_px + margin:.6f})")
+
+
+def validate_tp_distance(
+    side: str, tp_price: float, mark_px: float, tick: str,
+) -> None:
+    """验证 TP 距离 mark price 不能过近。"""
+    try:
+        tick_f = float(tick)
+    except ValueError:
+        tick_f = 0.0
+    margin = max(tick_f * 2.0, mark_px * 0.0005)
+    if side == "LONG" and tp_price <= mark_px + margin:
+        raise ValueError(
+            f"TP {tp_price} too close to mark {mark_px} (need >= {mark_px + margin:.6f})")
+    if side == "SHORT" and tp_price >= mark_px - margin:
+        raise ValueError(
+            f"TP {tp_price} too close to mark {mark_px} (need <= {mark_px - margin:.6f})")

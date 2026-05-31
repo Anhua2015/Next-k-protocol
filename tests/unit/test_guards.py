@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ingest.guards import (
     GUARDS,
+    guard_close_requires_position,
     guard_dedup_insert,
     guard_invalid_source,
     guard_max_positions,
@@ -29,6 +30,7 @@ class FakeSignal:
     regime: str = "TREND_UP"
     notional_usdt: float = 100.0
     play: str = "PLAY01"
+    action: str = "open"
 
 
 @dataclass
@@ -93,54 +95,65 @@ class TestGuardDedupInsert:
 
 
 class TestGuardPositionExists:
-    def test_no_position_passes(self):
-        ctx = FakeCtx()
-        ctx.db.get_open_position_for_symbol.return_value = None
-        d = guard_position_exists(FakeSignal(), ctx)
+    @patch("trader.list_live_positions", return_value=[])
+    def test_no_position_passes(self, _mock):
+        d = guard_position_exists(FakeSignal(action="open"), FakeCtx())
         assert not d.skip
 
-    def test_position_exists_skips(self):
-        ctx = FakeCtx()
-        ctx.db.get_open_position_for_symbol.return_value = {"id": 1}
-        d = guard_position_exists(FakeSignal(), ctx)
+    @patch(
+        "trader.list_live_positions",
+        return_value=[{"symbol": "BTCUSDT", "positionAmt": "0.01"}],
+    )
+    def test_position_exists_skips_open(self, _mock):
+        d = guard_position_exists(FakeSignal(action="open"), FakeCtx())
         assert d.skip
+        assert d.action == "skipped_position_exists"
 
-    def test_moss_quant_bypasses_position_exists(self):
-        ctx = FakeCtx()
-        ctx.db.get_open_position_for_symbol.return_value = {"id": 1}
-        d = guard_position_exists(FakeSignal(source="moss_quant"), ctx)
+    @patch(
+        "trader.list_live_positions",
+        return_value=[{"symbol": "BTCUSDT", "positionAmt": "0.01"}],
+    )
+    def test_close_passes_when_position_exists(self, _mock):
+        d = guard_position_exists(FakeSignal(action="close"), FakeCtx())
+        assert not d.skip
+
+
+class TestGuardCloseRequiresPosition:
+    @patch("trader.list_live_positions", return_value=[])
+    def test_close_without_position_skips(self, _mock):
+        d = guard_close_requires_position(FakeSignal(action="close"), FakeCtx())
+        assert d.skip
+        assert d.action == "skipped_no_position"
+
+    @patch(
+        "trader.list_live_positions",
+        return_value=[{"symbol": "BTCUSDT", "positionAmt": "0.01"}],
+    )
+    def test_close_with_position_passes(self, _mock):
+        d = guard_close_requires_position(FakeSignal(action="close"), FakeCtx())
         assert not d.skip
 
 
 class TestGuardMaxPositions:
-    def test_under_limit_passes(self):
+    @patch("trader.list_live_positions", return_value=[{"symbol": "ETHUSDT", "positionAmt": "1"}])
+    def test_under_limit_passes(self, _mock):
         ctx = FakeCtx(max_pos=8)
-        ctx.db.count_open_by_play.return_value = 3
-        ctx.db.count_open_total.return_value = 4
-        d = guard_max_positions(FakeSignal(), ctx)
+        d = guard_max_positions(FakeSignal(action="open"), ctx)
         assert not d.skip
 
-    def test_play_at_limit_skips(self):
-        ctx = FakeCtx()
-        ctx.db.count_open_by_play.return_value = 5
-        d = guard_max_positions(FakeSignal(), ctx)
-        assert d.skip
-
-    def test_global_at_limit_skips(self):
+    @patch("trader.list_live_positions", return_value=[{"symbol": "X"}] * 8)
+    def test_global_at_limit_skips_open(self, _mock):
         ctx = FakeCtx(max_pos=8)
-        ctx.db.count_open_by_play.return_value = 3
-        ctx.db.count_open_total.return_value = 8
-        d = guard_max_positions(FakeSignal(), ctx)
+        d = guard_max_positions(FakeSignal(action="open"), ctx)
         assert d.skip
 
-    def test_momentum_source_max_skips(self):
-        ctx = FakeCtx(source_max={"momentum": 3})
-        ctx.db.count_open_by_source.return_value = 3
-        ctx.db.count_open_total.return_value = 3
-        d = guard_max_positions(FakeSignal(source="momentum"), ctx)
-        assert d.skip
+    @patch("trader.list_live_positions", return_value=[{"symbol": "X"}] * 8)
+    def test_close_not_blocked_by_max_positions(self, _mock):
+        ctx = FakeCtx(max_pos=8)
+        d = guard_max_positions(FakeSignal(action="close"), ctx)
+        assert not d.skip
 
 
 class TestGuardChain:
     def test_all_guards_registered(self):
-        assert len(GUARDS) >= 6
+        assert len(GUARDS) >= 7

@@ -59,6 +59,7 @@ from binance.orders import (
 from trading.protective import (
     emergency_close as _emergency_close_fn,
     validate_sl_distance as _validate_sl_distance_fn,
+    validate_tp_distance as _validate_tp_distance_fn,
 )
 
 logger = logging.getLogger("trader")
@@ -137,6 +138,9 @@ def _emergency_close(sym, side, qty, ps):
 def _validate_sl_distance(side, sl, mark, tick):
     return _validate_sl_distance_fn(side, sl, mark, tick)
 
+def _validate_tp_distance(side, tp, mark, tick):
+    return _validate_tp_distance_fn(side, tp, mark, tick)
+
 def _build_protective(s, cs, sp, q, ps, k):
     from trading.protective import build_protective_params
     return build_protective_params(s, cs, sp, q, ps, k)
@@ -161,6 +165,21 @@ def _cancel_open_sl_orders(symbol: str) -> None:
             or ""
         ).upper()
         if "STOP" not in order_type or "TAKE_PROFIT" in order_type:
+            continue
+        algo_id = order.get("algoId") or order.get("clientAlgoId")
+        if algo_id:
+            cancel_algo_order(str(algo_id))
+
+
+def _cancel_open_tp_orders(symbol: str) -> None:
+    for order in get_open_algo_orders(symbol):
+        order_type = str(
+            order.get("type")
+            or order.get("origType")
+            or order.get("algoType")
+            or ""
+        ).upper()
+        if "TAKE_PROFIT" not in order_type:
             continue
         algo_id = order.get("algoId") or order.get("clientAlgoId")
         if algo_id:
@@ -315,6 +334,82 @@ def _update_live_stop_loss(signal: Dict[str, Any]) -> bool:
     return True
 
 
+def _update_live_take_profit(signal: Dict[str, Any]) -> bool:
+    signal_log_id = signal["signal_log_id"]
+    symbol = signal["symbol"]
+    side = str(signal["side"]).upper()
+    new_tp_price = signal.get("tp_price")
+    if new_tp_price is None:
+        update_signal_status(signal_log_id, "error", "missing_tp_price")
+        return False
+
+    live_pos = get_live_position(symbol)
+    if not live_pos:
+        update_signal_status(signal_log_id, "error", "live_position_missing")
+        return False
+
+    amt = float(live_pos.get("positionAmt") or 0)
+    if amt == 0:
+        update_signal_status(signal_log_id, "error", "live_position_missing")
+        return False
+
+    actual_side = "LONG" if amt > 0 else "SHORT"
+    if side != actual_side:
+        update_signal_status(
+            signal_log_id,
+            "error",
+            f"side_mismatch:{side}->{actual_side}",
+        )
+        return False
+
+    hedge_mode = _detect_hedge_mode()
+    position_side = _position_side_for_live_pos(live_pos, hedge_mode)
+    qty = abs(amt)
+    mark_px = float(live_pos.get("markPrice") or get_mark_price(symbol) or 0)
+    close_side = "SELL" if actual_side == "LONG" else "BUY"
+    try:
+        step_size, tick_size, _min_notional = _get_filters(symbol)
+        _validate_tp_distance(actual_side, float(new_tp_price), mark_px, tick_size)
+        _cancel_open_tp_orders(symbol)
+        resp = _place_protective(
+            symbol,
+            close_side,
+            _round_price(float(new_tp_price), tick_size),
+            _round_quantity(qty, step_size),
+            position_side,
+            tick_size,
+            "TP",
+        )
+    except Exception as exc:
+        logger.error("update live TP failed %s %s: %s", actual_side, symbol, exc)
+        update_signal_status(signal_log_id, "error", f"update_tp_failed: {exc}")
+        return False
+
+    update_signal_status(signal_log_id, "traded", None)
+    from repos.signals_repo import update_execution
+
+    update_execution(
+        signal_log_id,
+        status="traded",
+        result={
+            "action": "update_tp",
+            "symbol": symbol,
+            "side": actual_side,
+            "quantity": qty,
+            "mark_price": mark_px,
+            "new_tp_price": float(new_tp_price),
+            "tp_order": resp,
+        },
+        payload={
+            "symbol": symbol,
+            "side": side,
+            "new_tp_price": float(new_tp_price),
+            "client_ref": signal.get("client_ref") or "",
+        },
+    )
+    return True
+
+
 # -- execute_trade (Phase 4: orchestrator, delegates to trading/) ------------
 
 def execute_trade(signal: Dict[str, Any]) -> bool:
@@ -336,6 +431,8 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
         return _close_live_position(signal)
     if action == "update_sl":
         return _update_live_stop_loss(signal)
+    if action == "update_tp":
+        return _update_live_take_profit(signal)
 
     # Resolve margin/leverage
     try:

@@ -89,7 +89,7 @@ class SignalItem(BaseModel):
     )
     action: Optional[str] = Field(
         "open",
-        description="动作类型：open / rolling / close / update_sl / exchange_sl / exchange_tp / external_close",
+        description="动作类型：open / rolling / close / update_sl / update_tp / exchange_sl / exchange_tp / external_close",
     )
 
 

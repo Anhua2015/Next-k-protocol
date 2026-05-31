@@ -36,13 +36,31 @@ def guard_invalid_source(sig: Any, _ctx: Any) -> GuardDecision:
 
 
 def guard_source_disabled(sig: Any, ctx: Any) -> GuardDecision:
-    return GuardDecision(skip=False)
+    if ctx.db.source_enabled(sig.source):
+        return GuardDecision(skip=False)
+    return GuardDecision(
+        skip=True,
+        reason=f"source disabled: {sig.source}",
+        action="skipped_source_disabled",
+    )
+
+
+def _signal_payload(sig: Any) -> Dict[str, Any]:
+    if hasattr(sig, "model_dump"):
+        return sig.model_dump()
+    if hasattr(sig, "dict"):
+        return sig.dict()
+    from dataclasses import asdict, is_dataclass
+
+    if is_dataclass(sig):
+        return asdict(sig)
+    return dict(vars(sig))
 
 
 def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
     """去重：insert_signal 返回 None = 已存在。"""
     from binance.time_sync import now_utc
-    payload = sig.model_dump() if hasattr(sig, "model_dump") else sig.dict()
+    payload = _signal_payload(sig)
     sid = ctx.db.insert_signal(
         source=sig.source, api_signal_id=sig.api_signal_id,
         symbol=sig.symbol, side=sig.side,
@@ -62,21 +80,59 @@ def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
     return GuardDecision(skip=False, signal_log_id=sid)
 
 
-def guard_position_exists(sig: Any, ctx: Any) -> GuardDecision:
+def _signal_action(sig: Any) -> str:
+    action = getattr(sig, "action", None) or ""
+    if action:
+        return str(action).lower()
+    play = (getattr(sig, "play", None) or "").lower()
+    if "rolling" in play:
+        return "rolling"
+    return "open"
+
+
+def _symbol_has_live_position(symbol: str) -> bool:
     from trader import list_live_positions
 
+    sym = str(symbol or "").upper()
     for pos in list_live_positions():
-        if pos.get("symbol") == sig.symbol:
-            return GuardDecision(
-                skip=True,
-                reason="open position for symbol",
-                action="skipped_position_exists",
-            )
+        if str(pos.get("symbol") or "").upper() == sym:
+            amt = float(pos.get("positionAmt") or pos.get("quantity") or 0)
+            if amt != 0:
+                return True
+    return False
+
+
+def guard_position_exists(sig: Any, ctx: Any) -> GuardDecision:
+    """开仓/加仓：同 symbol 已有持仓则跳过。"""
+    action = _signal_action(sig)
+    if action not in ("open", "rolling"):
+        return GuardDecision(skip=False)
+    if _symbol_has_live_position(sig.symbol):
+        return GuardDecision(
+            skip=True,
+            reason="open position for symbol",
+            action="skipped_position_exists",
+        )
     return GuardDecision(skip=False)
 
 
+def guard_close_requires_position(sig: Any, ctx: Any) -> GuardDecision:
+    """平仓：无持仓则跳过。"""
+    if _signal_action(sig) != "close":
+        return GuardDecision(skip=False)
+    if _symbol_has_live_position(sig.symbol):
+        return GuardDecision(skip=False)
+    return GuardDecision(
+        skip=True,
+        reason="no open position for symbol",
+        action="skipped_no_position",
+    )
+
+
 def guard_max_positions(sig: Any, ctx: Any) -> GuardDecision:
-    """仅按全局最大持仓数检查。"""
+    """仅开仓/加仓时按全局最大持仓数检查。"""
+    if _signal_action(sig) not in ("open", "rolling"):
+        return GuardDecision(skip=False)
     from trader import list_live_positions
 
     max_pos = ctx.max_pos
@@ -95,5 +151,6 @@ GUARDS = [
     guard_dedup_insert,
     guard_source_disabled,
     guard_position_exists,
+    guard_close_requires_position,
     guard_max_positions,
 ]
