@@ -146,7 +146,30 @@ def _build_protective(s, cs, sp, q, ps, k):
     return build_protective_params(s, cs, sp, q, ps, k)
 
 def _place_protective(s, cs, sp, q, ps, ts, k):
-    return place_algo_order(_build_protective(s, cs, sp, q, ps, k))
+    params = _build_protective(s, cs, sp, q, ps, k)
+    logger.info(
+        "place protective order symbol=%s kind=%s trigger=%s qty=%s close_side=%s position_side=%s",
+        s,
+        k,
+        params.get("triggerPrice"),
+        params.get("quantity"),
+        cs,
+        ps or "BOTH",
+    )
+    resp = place_algo_order(params)
+    logger.info(
+        "placed protective order symbol=%s kind=%s algo_id=%s order_id=%s trigger=%s qty=%s",
+        s,
+        k,
+        resp.get("algoId") or "",
+        resp.get("orderId") or "",
+        params.get("triggerPrice"),
+        params.get("quantity"),
+    )
+    return resp
+
+
+_TERMINAL_ALGO_STATUSES = {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FAILED"}
 
 
 def _position_side_for_live_pos(pos: Dict[str, Any], hedge_mode: bool) -> Optional[str]:
@@ -156,34 +179,290 @@ def _position_side_for_live_pos(pos: Dict[str, Any], hedge_mode: bool) -> Option
     return raw or None
 
 
-def _cancel_open_sl_orders(symbol: str) -> None:
-    for order in get_open_algo_orders(symbol):
-        order_type = str(
-            order.get("type")
-            or order.get("origType")
-            or order.get("algoType")
-            or ""
-        ).upper()
-        if "STOP" not in order_type or "TAKE_PROFIT" in order_type:
-            continue
-        algo_id = order.get("algoId") or order.get("clientAlgoId")
-        if algo_id:
-            cancel_algo_order(str(algo_id))
+def _algo_order_matches(
+    order: Dict[str, Any],
+    *,
+    kind: str,
+    close_side: Optional[str],
+    position_side: Optional[str],
+    actual_side: Optional[str] = None,
+    reference_price: Optional[float] = None,
+) -> tuple[bool, Optional[str]]:
+    order_type = str(
+        order.get("type")
+        or order.get("origType")
+        or order.get("algoType")
+        or ""
+    ).upper()
+    if kind == "SL":
+        if "STOP" in order_type and "TAKE_PROFIT" not in order_type:
+            pass
+        elif "TAKE_PROFIT" in order_type:
+            return False, "type_mismatch"
+        else:
+            trigger_match, reason = _algo_order_matches_by_trigger(
+                order,
+                kind=kind,
+                actual_side=actual_side,
+                reference_price=reference_price,
+            )
+            if not trigger_match:
+                return False, reason
+    else:
+        if "TAKE_PROFIT" in order_type:
+            pass
+        elif "STOP" in order_type:
+            return False, "type_mismatch"
+        else:
+            trigger_match, reason = _algo_order_matches_by_trigger(
+                order,
+                kind=kind,
+                actual_side=actual_side,
+                reference_price=reference_price,
+            )
+            if not trigger_match:
+                return False, reason
+
+    status = str(order.get("status") or order.get("algoStatus") or "").upper()
+    if status in _TERMINAL_ALGO_STATUSES:
+        return False, "terminal_status"
+
+    if close_side:
+        order_side = str(order.get("side") or "").upper()
+        if order_side and order_side != close_side:
+            return False, "side_mismatch"
+
+    if position_side:
+        order_pos_side = str(order.get("positionSide") or "").upper()
+        if order_pos_side and order_pos_side != str(position_side).upper():
+            return False, "position_side_mismatch"
+
+    return True, None
 
 
-def _cancel_open_tp_orders(symbol: str) -> None:
-    for order in get_open_algo_orders(symbol):
-        order_type = str(
-            order.get("type")
-            or order.get("origType")
-            or order.get("algoType")
-            or ""
-        ).upper()
-        if "TAKE_PROFIT" not in order_type:
+def _algo_order_trigger_price(order: Dict[str, Any]) -> Optional[float]:
+    raw = order.get("triggerPrice")
+    if raw in (None, ""):
+        raw = order.get("stopPrice")
+    if raw in (None, ""):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _algo_order_matches_by_trigger(
+    order: Dict[str, Any],
+    *,
+    kind: str,
+    actual_side: Optional[str],
+    reference_price: Optional[float],
+) -> tuple[bool, Optional[str]]:
+    if not actual_side:
+        return False, "actual_side_missing"
+    if reference_price is None or reference_price <= 0:
+        return False, "reference_price_missing"
+
+    trigger_price = _algo_order_trigger_price(order)
+    if trigger_price is None:
+        return False, "trigger_price_missing"
+
+    side = str(actual_side).upper()
+    if side == "LONG":
+        is_tp = trigger_price > reference_price
+    elif side == "SHORT":
+        is_tp = trigger_price < reference_price
+    else:
+        return False, "actual_side_invalid"
+
+    if kind == "TP":
+        return (True, None) if is_tp else (False, "trigger_kind_mismatch")
+    return (False, "trigger_kind_mismatch") if is_tp else (True, None)
+
+
+def _should_resolve_algo_order_detail(order: Dict[str, Any]) -> bool:
+    order_type = str(order.get("type") or "").upper()
+    orig_type = str(order.get("origType") or "").upper()
+    algo_type = str(order.get("algoType") or "").upper()
+    return algo_type == "CONDITIONAL" and not order_type and not orig_type
+
+
+def _resolve_algo_order_for_matching(order: Dict[str, Any]) -> Dict[str, Any]:
+    if not _should_resolve_algo_order_detail(order):
+        return order
+
+    algo_id = order.get("algoId") or order.get("clientAlgoId")
+    if not algo_id:
+        return order
+
+    try:
+        detail = get_algo_order(str(algo_id))
+    except Exception as exc:
+        logger.warning(
+            "algoOrder detail fetch failed algo_id=%s symbol=%s error=%s",
+            algo_id,
+            order.get("symbol") or "",
+            exc,
+        )
+        return order
+
+    resolved = dict(order)
+    if isinstance(detail, dict):
+        resolved.update(detail)
+    logger.info("algoOrder detail %s", _algo_order_diag(resolved))
+    return resolved
+
+
+def _open_protective_algo_orders(
+    symbol: str,
+    *,
+    kind: str,
+    close_side: Optional[str],
+    position_side: Optional[str],
+    actual_side: Optional[str] = None,
+    reference_price: Optional[float] = None,
+) -> list[Dict[str, Any]]:
+    raw_orders = get_open_algo_orders(symbol)
+    logger.info("openAlgoOrders raw symbol=%s count=%d", symbol, len(raw_orders))
+    matched: list[Dict[str, Any]] = []
+    for order in raw_orders:
+        logger.info("openAlgoOrders raw %s", _algo_order_diag(order))
+        order_for_match = _resolve_algo_order_for_matching(order)
+        matched_order, reason = _algo_order_matches(
+            order_for_match,
+            kind=kind,
+            close_side=close_side,
+            position_side=position_side,
+            actual_side=actual_side,
+            reference_price=reference_price,
+        )
+        if not matched_order:
+            logger.info(
+                "protective order skipped symbol=%s kind=%s %s reason=%s",
+                symbol,
+                kind,
+                _algo_order_diag(order_for_match),
+                reason or "unknown",
+            )
             continue
+        matched.append(order_for_match)
+    return matched
+
+
+def _algo_order_id(order: Dict[str, Any]) -> str:
+    return str(order.get("algoId") or order.get("clientAlgoId") or "unknown")
+
+
+def _live_pos_diag(pos: Dict[str, Any]) -> str:
+    return (
+        "symbol={symbol} position_amt={position_amt} position_side={position_side} "
+        "entry_price={entry_price} mark_price={mark_price} unrealized_pnl={unrealized_pnl}"
+    ).format(
+        symbol=pos.get("symbol") or "",
+        position_amt=pos.get("positionAmt") or pos.get("quantity") or "",
+        position_side=pos.get("positionSide") or "",
+        entry_price=pos.get("entryPrice") or "",
+        mark_price=pos.get("markPrice") or "",
+        unrealized_pnl=pos.get("unRealizedProfit") or pos.get("unrealizedProfit") or "",
+    )
+
+
+def _algo_order_diag(order: Dict[str, Any]) -> str:
+    return (
+        "algo_id={algo_id} symbol={symbol} side={side} position_side={position_side} "
+        "type={type_} orig_type={orig_type} algo_type={algo_type} status={status} "
+        "trigger_price={trigger_price} stop_price={stop_price}"
+    ).format(
+        algo_id=_algo_order_id(order),
+        symbol=order.get("symbol") or "",
+        side=order.get("side") or "",
+        position_side=order.get("positionSide") or "",
+        type_=order.get("type") or "",
+        orig_type=order.get("origType") or "",
+        algo_type=order.get("algoType") or "",
+        status=order.get("status") or order.get("algoStatus") or "",
+        trigger_price=order.get("triggerPrice") or "",
+        stop_price=order.get("stopPrice") or "",
+    )
+
+
+def _cancel_open_protective_orders(
+    symbol: str,
+    *,
+    kind: str,
+    close_side: Optional[str],
+    position_side: Optional[str],
+    actual_side: Optional[str] = None,
+    reference_price: Optional[float] = None,
+) -> None:
+    matched = _open_protective_algo_orders(
+        symbol,
+        kind=kind,
+        close_side=close_side,
+        position_side=position_side,
+        actual_side=actual_side,
+        reference_price=reference_price,
+    )
+    logger.info(
+        "cancel protective orders symbol=%s kind=%s close_side=%s position_side=%s count=%d algo_ids=%s",
+        symbol,
+        kind,
+        close_side or "",
+        position_side or "BOTH",
+        len(matched),
+        ",".join(_algo_order_id(order) for order in matched) or "-",
+    )
+    for order in matched:
         algo_id = order.get("algoId") or order.get("clientAlgoId")
         if algo_id:
-            cancel_algo_order(str(algo_id))
+            logger.info(
+                "cancel protective order symbol=%s kind=%s algo_id=%s status=%s",
+                symbol,
+                kind,
+                algo_id,
+                str(order.get("status") or order.get("algoStatus") or "").upper() or "UNKNOWN",
+            )
+            ok = cancel_algo_order(str(algo_id))
+            logger.info(
+                "cancel protective order result symbol=%s kind=%s algo_id=%s ok=%s",
+                symbol,
+                kind,
+                algo_id,
+                ok,
+            )
+
+    remaining = _open_protective_algo_orders(
+        symbol,
+        kind=kind,
+        close_side=close_side,
+        position_side=position_side,
+        actual_side=actual_side,
+        reference_price=reference_price,
+    )
+    if remaining:
+        logger.error(
+            "stale protective orders remain symbol=%s kind=%s close_side=%s position_side=%s algo_ids=%s",
+            symbol,
+            kind,
+            close_side or "",
+            position_side or "BOTH",
+            ",".join(_algo_order_id(order) for order in remaining),
+        )
+        ids = [
+            _algo_order_id(order)
+            for order in remaining
+        ]
+        raise RuntimeError(
+            f"stale_{kind.lower()}_orders_remain:{','.join(ids)}"
+        )
+    logger.info(
+        "cancel protective orders cleared symbol=%s kind=%s close_side=%s position_side=%s",
+        symbol,
+        kind,
+        close_side or "",
+        position_side or "BOTH",
+    )
 
 
 def _close_live_position(signal: Dict[str, Any]) -> bool:
@@ -291,10 +570,31 @@ def _update_live_stop_loss(signal: Dict[str, Any]) -> bool:
     qty = abs(amt)
     mark_px = float(live_pos.get("markPrice") or get_mark_price(symbol) or 0)
     close_side = "SELL" if actual_side == "LONG" else "BUY"
+    logger.info(
+        "update_sl context symbol=%s requested_side=%s actual_side=%s hedge_mode=%s "
+        "close_side=%s position_side=%s qty=%s mark_price=%s new_sl=%s live_pos={%s}",
+        symbol,
+        side,
+        actual_side,
+        hedge_mode,
+        close_side,
+        position_side or "BOTH",
+        qty,
+        mark_px,
+        new_sl_price,
+        _live_pos_diag(live_pos),
+    )
     try:
         step_size, tick_size, _min_notional = _get_filters(symbol)
         _validate_sl_distance(actual_side, float(new_sl_price), mark_px, tick_size)
-        _cancel_open_sl_orders(symbol)
+        _cancel_open_protective_orders(
+            symbol,
+            kind="SL",
+            close_side=close_side,
+            position_side=position_side,
+            actual_side=actual_side,
+            reference_price=mark_px,
+        )
         resp = _place_protective(
             symbol,
             close_side,
@@ -367,10 +667,31 @@ def _update_live_take_profit(signal: Dict[str, Any]) -> bool:
     qty = abs(amt)
     mark_px = float(live_pos.get("markPrice") or get_mark_price(symbol) or 0)
     close_side = "SELL" if actual_side == "LONG" else "BUY"
+    logger.info(
+        "update_tp context symbol=%s requested_side=%s actual_side=%s hedge_mode=%s "
+        "close_side=%s position_side=%s qty=%s mark_price=%s new_tp=%s live_pos={%s}",
+        symbol,
+        side,
+        actual_side,
+        hedge_mode,
+        close_side,
+        position_side or "BOTH",
+        qty,
+        mark_px,
+        new_tp_price,
+        _live_pos_diag(live_pos),
+    )
     try:
         step_size, tick_size, _min_notional = _get_filters(symbol)
         _validate_tp_distance(actual_side, float(new_tp_price), mark_px, tick_size)
-        _cancel_open_tp_orders(symbol)
+        _cancel_open_protective_orders(
+            symbol,
+            kind="TP",
+            close_side=close_side,
+            position_side=position_side,
+            actual_side=actual_side,
+            reference_price=mark_px,
+        )
         resp = _place_protective(
             symbol,
             close_side,
