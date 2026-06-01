@@ -216,6 +216,39 @@ def _algo_order_matches(
     return True, None
 
 
+def _should_resolve_algo_order_detail(order: Dict[str, Any]) -> bool:
+    order_type = str(order.get("type") or "").upper()
+    orig_type = str(order.get("origType") or "").upper()
+    algo_type = str(order.get("algoType") or "").upper()
+    return algo_type == "CONDITIONAL" and not order_type and not orig_type
+
+
+def _resolve_algo_order_for_matching(order: Dict[str, Any]) -> Dict[str, Any]:
+    if not _should_resolve_algo_order_detail(order):
+        return order
+
+    algo_id = order.get("algoId") or order.get("clientAlgoId")
+    if not algo_id:
+        return order
+
+    try:
+        detail = get_algo_order(str(algo_id))
+    except Exception as exc:
+        logger.warning(
+            "algoOrder detail fetch failed algo_id=%s symbol=%s error=%s",
+            algo_id,
+            order.get("symbol") or "",
+            exc,
+        )
+        return order
+
+    resolved = dict(order)
+    if isinstance(detail, dict):
+        resolved.update(detail)
+    logger.info("algoOrder detail %s", _algo_order_diag(resolved))
+    return resolved
+
+
 def _open_protective_algo_orders(
     symbol: str,
     *,
@@ -228,8 +261,9 @@ def _open_protective_algo_orders(
     matched: list[Dict[str, Any]] = []
     for order in raw_orders:
         logger.info("openAlgoOrders raw %s", _algo_order_diag(order))
+        order_for_match = _resolve_algo_order_for_matching(order)
         matched_order, reason = _algo_order_matches(
-            order,
+            order_for_match,
             kind=kind,
             close_side=close_side,
             position_side=position_side,
@@ -239,11 +273,11 @@ def _open_protective_algo_orders(
                 "protective order skipped symbol=%s kind=%s %s reason=%s",
                 symbol,
                 kind,
-                _algo_order_diag(order),
+                _algo_order_diag(order_for_match),
                 reason or "unknown",
             )
             continue
-        matched.append(order)
+        matched.append(order_for_match)
     return matched
 
 

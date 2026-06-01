@@ -357,6 +357,171 @@ def test_moss_quant_update_sl_logs_raw_open_orders_and_skip_reason(
     assert "reason=side_mismatch" in log_text
 
 
+def test_moss_quant_update_sl_resolves_conditional_orders_via_algo_detail(
+    seeded_config, httpx_mock, load_binance_fixture, caplog
+):
+    base = "https://testnet.binancefuture.com"
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/time')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("server_time"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/exchangeInfo')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("exchange_info_btcusdt"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v2/positionRisk')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("position_risk_open"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/positionSide/dual')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("position_side_single"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/premiumIndex')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("premium_index_btcusdt"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/openAlgoOrders')}(\?.*)?$"),
+        status_code=200,
+        json=[
+            {
+                "algoId": 11111111,
+                "symbol": "BTCUSDT",
+                "side": "SELL",
+                "positionSide": "BOTH",
+                "algoType": "CONDITIONAL",
+                "status": "NEW",
+            },
+            {
+                "algoId": 22222222,
+                "symbol": "BTCUSDT",
+                "side": "SELL",
+                "positionSide": "BOTH",
+                "algoType": "CONDITIONAL",
+                "status": "NEW",
+            },
+        ],
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/openAlgoOrders')}(\?.*)?$"),
+        status_code=200,
+        json=[
+            {
+                "algoId": 22222222,
+                "symbol": "BTCUSDT",
+                "side": "SELL",
+                "positionSide": "BOTH",
+                "algoType": "CONDITIONAL",
+                "status": "NEW",
+            },
+        ],
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/algoOrder')}(\?.*algoId=11111111.*)?$"),
+        status_code=200,
+        json={
+            "algoId": 11111111,
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "positionSide": "BOTH",
+            "type": "STOP_MARKET",
+            "origType": "STOP_MARKET",
+            "algoType": "CONDITIONAL",
+            "status": "NEW",
+        },
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/algoOrder')}(\?.*algoId=22222222.*)?$"),
+        status_code=200,
+        json={
+            "algoId": 22222222,
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "positionSide": "BOTH",
+            "type": "TAKE_PROFIT_MARKET",
+            "origType": "TAKE_PROFIT_MARKET",
+            "algoType": "CONDITIONAL",
+            "status": "NEW",
+        },
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="DELETE",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/algoOrder')}(\?.*algoId=11111111.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("cancel_order_success"),
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/algoOrder')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("place_algo_order_success"),
+        is_optional=True,
+    )
+
+    caplog.set_level("INFO")
+    client = _client(seeded_config)
+
+    resp = client.post(
+        "/api/binance/signals/ingest",
+        json=_mq_payload(
+            api_signal_id="mq-update-sl-detail-1",
+            margin_usdt=None,
+            leverage=None,
+            entry_price=None,
+            tp_price=None,
+            sl_price=66800.0,
+            action="update_sl",
+            play="trailing_stop",
+        ),
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["traded"] == 1
+    log_text = caplog.text
+    assert "algoOrder detail algo_id=11111111" in log_text
+    assert "algoOrder detail algo_id=22222222" in log_text
+    assert "cancel protective orders symbol=BTCUSDT kind=SL" in log_text
+    assert "count=1 algo_ids=11111111" in log_text
+    delete_calls = [
+        r for r in httpx_mock.get_requests() if "/fapi/v1/algoOrder" in str(r.url) and r.method == "DELETE"
+    ]
+    assert len(delete_calls) == 1
+    assert "algoId=11111111" in str(delete_calls[0].url)
+
+
 def test_moss_quant_update_sl_aborts_when_old_sl_still_open(
     seeded_config, httpx_mock, load_binance_fixture
 ):
