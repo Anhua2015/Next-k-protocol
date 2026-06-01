@@ -146,7 +146,30 @@ def _build_protective(s, cs, sp, q, ps, k):
     return build_protective_params(s, cs, sp, q, ps, k)
 
 def _place_protective(s, cs, sp, q, ps, ts, k):
-    return place_algo_order(_build_protective(s, cs, sp, q, ps, k))
+    params = _build_protective(s, cs, sp, q, ps, k)
+    logger.info(
+        "place protective order symbol=%s kind=%s trigger=%s qty=%s close_side=%s position_side=%s",
+        s,
+        k,
+        params.get("triggerPrice"),
+        params.get("quantity"),
+        cs,
+        ps or "BOTH",
+    )
+    resp = place_algo_order(params)
+    logger.info(
+        "placed protective order symbol=%s kind=%s algo_id=%s order_id=%s trigger=%s qty=%s",
+        s,
+        k,
+        resp.get("algoId") or "",
+        resp.get("orderId") or "",
+        params.get("triggerPrice"),
+        params.get("quantity"),
+    )
+    return resp
+
+
+_TERMINAL_ALGO_STATUSES = {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FAILED"}
 
 
 def _position_side_for_live_pos(pos: Dict[str, Any], hedge_mode: bool) -> Optional[str]:
@@ -156,34 +179,130 @@ def _position_side_for_live_pos(pos: Dict[str, Any], hedge_mode: bool) -> Option
     return raw or None
 
 
-def _cancel_open_sl_orders(symbol: str) -> None:
-    for order in get_open_algo_orders(symbol):
-        order_type = str(
-            order.get("type")
-            or order.get("origType")
-            or order.get("algoType")
-            or ""
-        ).upper()
+def _algo_order_matches(
+    order: Dict[str, Any],
+    *,
+    kind: str,
+    close_side: Optional[str],
+    position_side: Optional[str],
+) -> bool:
+    order_type = str(
+        order.get("type")
+        or order.get("origType")
+        or order.get("algoType")
+        or ""
+    ).upper()
+    if kind == "SL":
         if "STOP" not in order_type or "TAKE_PROFIT" in order_type:
-            continue
-        algo_id = order.get("algoId") or order.get("clientAlgoId")
-        if algo_id:
-            cancel_algo_order(str(algo_id))
-
-
-def _cancel_open_tp_orders(symbol: str) -> None:
-    for order in get_open_algo_orders(symbol):
-        order_type = str(
-            order.get("type")
-            or order.get("origType")
-            or order.get("algoType")
-            or ""
-        ).upper()
+            return False
+    else:
         if "TAKE_PROFIT" not in order_type:
+            return False
+
+    status = str(order.get("status") or order.get("algoStatus") or "").upper()
+    if status in _TERMINAL_ALGO_STATUSES:
+        return False
+
+    if close_side:
+        order_side = str(order.get("side") or "").upper()
+        if order_side and order_side != close_side:
+            return False
+
+    if position_side:
+        order_pos_side = str(order.get("positionSide") or "").upper()
+        if order_pos_side and order_pos_side != str(position_side).upper():
+            return False
+
+    return True
+
+
+def _open_protective_algo_orders(
+    symbol: str,
+    *,
+    kind: str,
+    close_side: Optional[str],
+    position_side: Optional[str],
+) -> list[Dict[str, Any]]:
+    matched: list[Dict[str, Any]] = []
+    for order in get_open_algo_orders(symbol):
+        if not _algo_order_matches(
+            order,
+            kind=kind,
+            close_side=close_side,
+            position_side=position_side,
+        ):
             continue
+        matched.append(order)
+    return matched
+
+
+def _algo_order_id(order: Dict[str, Any]) -> str:
+    return str(order.get("algoId") or order.get("clientAlgoId") or "unknown")
+
+
+def _cancel_open_protective_orders(
+    symbol: str,
+    *,
+    kind: str,
+    close_side: Optional[str],
+    position_side: Optional[str],
+) -> None:
+    matched = _open_protective_algo_orders(
+        symbol,
+        kind=kind,
+        close_side=close_side,
+        position_side=position_side,
+    )
+    logger.info(
+        "cancel protective orders symbol=%s kind=%s close_side=%s position_side=%s count=%d algo_ids=%s",
+        symbol,
+        kind,
+        close_side or "",
+        position_side or "BOTH",
+        len(matched),
+        ",".join(_algo_order_id(order) for order in matched) or "-",
+    )
+    for order in matched:
         algo_id = order.get("algoId") or order.get("clientAlgoId")
         if algo_id:
+            logger.info(
+                "cancel protective order symbol=%s kind=%s algo_id=%s status=%s",
+                symbol,
+                kind,
+                algo_id,
+                str(order.get("status") or order.get("algoStatus") or "").upper() or "UNKNOWN",
+            )
             cancel_algo_order(str(algo_id))
+
+    remaining = _open_protective_algo_orders(
+        symbol,
+        kind=kind,
+        close_side=close_side,
+        position_side=position_side,
+    )
+    if remaining:
+        logger.error(
+            "stale protective orders remain symbol=%s kind=%s close_side=%s position_side=%s algo_ids=%s",
+            symbol,
+            kind,
+            close_side or "",
+            position_side or "BOTH",
+            ",".join(_algo_order_id(order) for order in remaining),
+        )
+        ids = [
+            _algo_order_id(order)
+            for order in remaining
+        ]
+        raise RuntimeError(
+            f"stale_{kind.lower()}_orders_remain:{','.join(ids)}"
+        )
+    logger.info(
+        "cancel protective orders cleared symbol=%s kind=%s close_side=%s position_side=%s",
+        symbol,
+        kind,
+        close_side or "",
+        position_side or "BOTH",
+    )
 
 
 def _close_live_position(signal: Dict[str, Any]) -> bool:
@@ -294,7 +413,12 @@ def _update_live_stop_loss(signal: Dict[str, Any]) -> bool:
     try:
         step_size, tick_size, _min_notional = _get_filters(symbol)
         _validate_sl_distance(actual_side, float(new_sl_price), mark_px, tick_size)
-        _cancel_open_sl_orders(symbol)
+        _cancel_open_protective_orders(
+            symbol,
+            kind="SL",
+            close_side=close_side,
+            position_side=position_side,
+        )
         resp = _place_protective(
             symbol,
             close_side,
@@ -370,7 +494,12 @@ def _update_live_take_profit(signal: Dict[str, Any]) -> bool:
     try:
         step_size, tick_size, _min_notional = _get_filters(symbol)
         _validate_tp_distance(actual_side, float(new_tp_price), mark_px, tick_size)
-        _cancel_open_tp_orders(symbol)
+        _cancel_open_protective_orders(
+            symbol,
+            kind="TP",
+            close_side=close_side,
+            position_side=position_side,
+        )
         resp = _place_protective(
             symbol,
             close_side,

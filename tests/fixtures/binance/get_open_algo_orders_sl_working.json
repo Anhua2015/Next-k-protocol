@@ -1,0 +1,10 @@
+[
+  {
+    "algoId": 33333333,
+    "symbol": "BTCUSDT",
+    "type": "STOP_MARKET",
+    "status": "WORKING",
+    "executedQty": "0",
+    "avgPrice": "0"
+  }
+]
