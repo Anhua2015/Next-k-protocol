@@ -185,6 +185,8 @@ def _algo_order_matches(
     kind: str,
     close_side: Optional[str],
     position_side: Optional[str],
+    actual_side: Optional[str] = None,
+    reference_price: Optional[float] = None,
 ) -> tuple[bool, Optional[str]]:
     order_type = str(
         order.get("type")
@@ -193,11 +195,33 @@ def _algo_order_matches(
         or ""
     ).upper()
     if kind == "SL":
-        if "STOP" not in order_type or "TAKE_PROFIT" in order_type:
+        if "STOP" in order_type and "TAKE_PROFIT" not in order_type:
+            pass
+        elif "TAKE_PROFIT" in order_type:
             return False, "type_mismatch"
+        else:
+            trigger_match, reason = _algo_order_matches_by_trigger(
+                order,
+                kind=kind,
+                actual_side=actual_side,
+                reference_price=reference_price,
+            )
+            if not trigger_match:
+                return False, reason
     else:
-        if "TAKE_PROFIT" not in order_type:
+        if "TAKE_PROFIT" in order_type:
+            pass
+        elif "STOP" in order_type:
             return False, "type_mismatch"
+        else:
+            trigger_match, reason = _algo_order_matches_by_trigger(
+                order,
+                kind=kind,
+                actual_side=actual_side,
+                reference_price=reference_price,
+            )
+            if not trigger_match:
+                return False, reason
 
     status = str(order.get("status") or order.get("algoStatus") or "").upper()
     if status in _TERMINAL_ALGO_STATUSES:
@@ -214,6 +238,47 @@ def _algo_order_matches(
             return False, "position_side_mismatch"
 
     return True, None
+
+
+def _algo_order_trigger_price(order: Dict[str, Any]) -> Optional[float]:
+    raw = order.get("triggerPrice")
+    if raw in (None, ""):
+        raw = order.get("stopPrice")
+    if raw in (None, ""):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _algo_order_matches_by_trigger(
+    order: Dict[str, Any],
+    *,
+    kind: str,
+    actual_side: Optional[str],
+    reference_price: Optional[float],
+) -> tuple[bool, Optional[str]]:
+    if not actual_side:
+        return False, "actual_side_missing"
+    if reference_price is None or reference_price <= 0:
+        return False, "reference_price_missing"
+
+    trigger_price = _algo_order_trigger_price(order)
+    if trigger_price is None:
+        return False, "trigger_price_missing"
+
+    side = str(actual_side).upper()
+    if side == "LONG":
+        is_tp = trigger_price > reference_price
+    elif side == "SHORT":
+        is_tp = trigger_price < reference_price
+    else:
+        return False, "actual_side_invalid"
+
+    if kind == "TP":
+        return (True, None) if is_tp else (False, "trigger_kind_mismatch")
+    return (False, "trigger_kind_mismatch") if is_tp else (True, None)
 
 
 def _should_resolve_algo_order_detail(order: Dict[str, Any]) -> bool:
@@ -255,6 +320,8 @@ def _open_protective_algo_orders(
     kind: str,
     close_side: Optional[str],
     position_side: Optional[str],
+    actual_side: Optional[str] = None,
+    reference_price: Optional[float] = None,
 ) -> list[Dict[str, Any]]:
     raw_orders = get_open_algo_orders(symbol)
     logger.info("openAlgoOrders raw symbol=%s count=%d", symbol, len(raw_orders))
@@ -267,6 +334,8 @@ def _open_protective_algo_orders(
             kind=kind,
             close_side=close_side,
             position_side=position_side,
+            actual_side=actual_side,
+            reference_price=reference_price,
         )
         if not matched_order:
             logger.info(
@@ -302,7 +371,8 @@ def _live_pos_diag(pos: Dict[str, Any]) -> str:
 def _algo_order_diag(order: Dict[str, Any]) -> str:
     return (
         "algo_id={algo_id} symbol={symbol} side={side} position_side={position_side} "
-        "type={type_} orig_type={orig_type} algo_type={algo_type} status={status}"
+        "type={type_} orig_type={orig_type} algo_type={algo_type} status={status} "
+        "trigger_price={trigger_price} stop_price={stop_price}"
     ).format(
         algo_id=_algo_order_id(order),
         symbol=order.get("symbol") or "",
@@ -312,6 +382,8 @@ def _algo_order_diag(order: Dict[str, Any]) -> str:
         orig_type=order.get("origType") or "",
         algo_type=order.get("algoType") or "",
         status=order.get("status") or order.get("algoStatus") or "",
+        trigger_price=order.get("triggerPrice") or "",
+        stop_price=order.get("stopPrice") or "",
     )
 
 
@@ -321,12 +393,16 @@ def _cancel_open_protective_orders(
     kind: str,
     close_side: Optional[str],
     position_side: Optional[str],
+    actual_side: Optional[str] = None,
+    reference_price: Optional[float] = None,
 ) -> None:
     matched = _open_protective_algo_orders(
         symbol,
         kind=kind,
         close_side=close_side,
         position_side=position_side,
+        actual_side=actual_side,
+        reference_price=reference_price,
     )
     logger.info(
         "cancel protective orders symbol=%s kind=%s close_side=%s position_side=%s count=%d algo_ids=%s",
@@ -361,6 +437,8 @@ def _cancel_open_protective_orders(
         kind=kind,
         close_side=close_side,
         position_side=position_side,
+        actual_side=actual_side,
+        reference_price=reference_price,
     )
     if remaining:
         logger.error(
@@ -514,6 +592,8 @@ def _update_live_stop_loss(signal: Dict[str, Any]) -> bool:
             kind="SL",
             close_side=close_side,
             position_side=position_side,
+            actual_side=actual_side,
+            reference_price=mark_px,
         )
         resp = _place_protective(
             symbol,
@@ -609,6 +689,8 @@ def _update_live_take_profit(signal: Dict[str, Any]) -> bool:
             kind="TP",
             close_side=close_side,
             position_side=position_side,
+            actual_side=actual_side,
+            reference_price=mark_px,
         )
         resp = _place_protective(
             symbol,
