@@ -135,6 +135,9 @@ def guard_max_positions(sig: Any, ctx: Any) -> GuardDecision:
         return GuardDecision(skip=False)
     from trader import list_live_positions
 
+    if _signal_action(sig) != "open":
+        return GuardDecision(skip=False)
+
     max_pos = ctx.max_pos
     if len(list_live_positions()) >= max_pos:
         return GuardDecision(
