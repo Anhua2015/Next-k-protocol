@@ -98,6 +98,85 @@ def test_moss_quant_rolling_forces_market_when_global_entry_type_is_limit(
     assert logs[0]["status"] == "traded"
 
 
+def test_moss_quant_close_bypasses_open_position_guard(seeded_config, mock_binance):
+    mock_binance.all(position_risk="position_risk_open")
+    client = _client(seeded_config)
+
+    resp = client.post(
+        "/api/binance/signals/ingest",
+        json=_mq_payload(
+            api_signal_id="mq-close-live-1",
+            margin_usdt=None,
+            leverage=None,
+            entry_price=None,
+            sl_price=None,
+            tp_price=None,
+            close_price=67280.0,
+            action="close",
+            play="take_profit",
+        ),
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["traded"] == 1
+    assert body["details"][0]["action"] == "traded"
+
+
+def test_moss_quant_update_sl_bypasses_open_position_guard(seeded_config, mock_binance):
+    mock_binance.all(position_risk="position_risk_open")
+    client = _client(seeded_config)
+
+    resp = client.post(
+        "/api/binance/signals/ingest",
+        json=_mq_payload(
+            api_signal_id="mq-update-sl-live-1",
+            margin_usdt=None,
+            leverage=None,
+            entry_price=None,
+            tp_price=None,
+            sl_price=66800.0,
+            action="update_sl",
+            play="trailing_stop",
+        ),
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["traded"] == 1
+    assert body["details"][0]["action"] == "traded"
+
+
+def test_moss_quant_rolling_bypasses_position_and_max_position_guards(
+    seeded_config, mock_binance
+):
+    seeded_config.set_config("entry_type", "LIMIT")
+    seeded_config.set_config("max_positions", "0")
+    mock_binance.all(
+        place_order="place_order_market_filled",
+        position_risk="position_risk_open",
+    )
+    client = _client(seeded_config)
+
+    resp = client.post(
+        "/api/binance/signals/ingest",
+        json=_mq_payload(
+            api_signal_id="mq-roll-live-guard-1",
+            entry_price=None,
+            action="rolling",
+            play="balanced_rolling",
+        ),
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["traded"] == 1
+    assert body["details"][0]["action"] == "traded"
+
+
 def test_update_sl_endpoint_removed(seeded_config):
     client = _client(seeded_config)
 

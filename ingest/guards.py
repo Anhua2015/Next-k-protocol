@@ -104,8 +104,7 @@ def _symbol_has_live_position(symbol: str) -> bool:
 
 def guard_position_exists(sig: Any, ctx: Any) -> GuardDecision:
     """开仓/加仓：同 symbol 已有持仓则跳过。"""
-    action = _signal_action(sig)
-    if action not in ("open", "rolling"):
+    if _signal_action(sig) != "open":
         return GuardDecision(skip=False)
     if _symbol_has_live_position(sig.symbol):
         return GuardDecision(
@@ -131,9 +130,10 @@ def guard_close_requires_position(sig: Any, ctx: Any) -> GuardDecision:
 
 def guard_max_positions(sig: Any, ctx: Any) -> GuardDecision:
     """仅开仓/加仓时按全局最大持仓数检查。"""
-    if _signal_action(sig) not in ("open", "rolling"):
-        return GuardDecision(skip=False)
     from trader import list_live_positions
+
+    if _signal_action(sig) != "open":
+        return GuardDecision(skip=False)
 
     max_pos = ctx.max_pos
     if len(list_live_positions()) >= max_pos:
