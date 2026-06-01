@@ -251,6 +251,20 @@ def _algo_order_id(order: Dict[str, Any]) -> str:
     return str(order.get("algoId") or order.get("clientAlgoId") or "unknown")
 
 
+def _live_pos_diag(pos: Dict[str, Any]) -> str:
+    return (
+        "symbol={symbol} position_amt={position_amt} position_side={position_side} "
+        "entry_price={entry_price} mark_price={mark_price} unrealized_pnl={unrealized_pnl}"
+    ).format(
+        symbol=pos.get("symbol") or "",
+        position_amt=pos.get("positionAmt") or pos.get("quantity") or "",
+        position_side=pos.get("positionSide") or "",
+        entry_price=pos.get("entryPrice") or "",
+        mark_price=pos.get("markPrice") or "",
+        unrealized_pnl=pos.get("unRealizedProfit") or pos.get("unrealizedProfit") or "",
+    )
+
+
 def _algo_order_diag(order: Dict[str, Any]) -> str:
     return (
         "algo_id={algo_id} symbol={symbol} side={side} position_side={position_side} "
@@ -299,7 +313,14 @@ def _cancel_open_protective_orders(
                 algo_id,
                 str(order.get("status") or order.get("algoStatus") or "").upper() or "UNKNOWN",
             )
-            cancel_algo_order(str(algo_id))
+            ok = cancel_algo_order(str(algo_id))
+            logger.info(
+                "cancel protective order result symbol=%s kind=%s algo_id=%s ok=%s",
+                symbol,
+                kind,
+                algo_id,
+                ok,
+            )
 
     remaining = _open_protective_algo_orders(
         symbol,
@@ -437,6 +458,20 @@ def _update_live_stop_loss(signal: Dict[str, Any]) -> bool:
     qty = abs(amt)
     mark_px = float(live_pos.get("markPrice") or get_mark_price(symbol) or 0)
     close_side = "SELL" if actual_side == "LONG" else "BUY"
+    logger.info(
+        "update_sl context symbol=%s requested_side=%s actual_side=%s hedge_mode=%s "
+        "close_side=%s position_side=%s qty=%s mark_price=%s new_sl=%s live_pos={%s}",
+        symbol,
+        side,
+        actual_side,
+        hedge_mode,
+        close_side,
+        position_side or "BOTH",
+        qty,
+        mark_px,
+        new_sl_price,
+        _live_pos_diag(live_pos),
+    )
     try:
         step_size, tick_size, _min_notional = _get_filters(symbol)
         _validate_sl_distance(actual_side, float(new_sl_price), mark_px, tick_size)
@@ -518,6 +553,20 @@ def _update_live_take_profit(signal: Dict[str, Any]) -> bool:
     qty = abs(amt)
     mark_px = float(live_pos.get("markPrice") or get_mark_price(symbol) or 0)
     close_side = "SELL" if actual_side == "LONG" else "BUY"
+    logger.info(
+        "update_tp context symbol=%s requested_side=%s actual_side=%s hedge_mode=%s "
+        "close_side=%s position_side=%s qty=%s mark_price=%s new_tp=%s live_pos={%s}",
+        symbol,
+        side,
+        actual_side,
+        hedge_mode,
+        close_side,
+        position_side or "BOTH",
+        qty,
+        mark_px,
+        new_tp_price,
+        _live_pos_diag(live_pos),
+    )
     try:
         step_size, tick_size, _min_notional = _get_filters(symbol)
         _validate_tp_distance(actual_side, float(new_tp_price), mark_px, tick_size)

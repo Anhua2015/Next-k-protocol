@@ -246,8 +246,11 @@ def test_moss_quant_update_sl_logs_cancel_and_place(
     body = resp.json()
     assert body["traded"] == 1
     log_text = caplog.text
+    assert "update_sl context symbol=BTCUSDT" in log_text
+    assert "live_pos={symbol=BTCUSDT position_amt=0.012 position_side=BOTH" in log_text
     assert "cancel protective orders symbol=BTCUSDT kind=SL" in log_text
     assert "cancel protective order symbol=BTCUSDT kind=SL algo_id=33333333" in log_text
+    assert "cancel protective order result symbol=BTCUSDT kind=SL algo_id=33333333 ok=True" in log_text
     assert "place protective order symbol=BTCUSDT kind=SL trigger=66800.0 qty=0.012" in log_text
     assert "placed protective order symbol=BTCUSDT kind=SL" in log_text
 
