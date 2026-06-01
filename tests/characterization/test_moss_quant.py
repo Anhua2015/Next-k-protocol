@@ -689,7 +689,7 @@ def test_moss_quant_update_tp_resolves_conditional_orders_via_trigger_price(
 
 
 def test_moss_quant_update_sl_aborts_when_old_sl_still_open(
-    seeded_config, httpx_mock, load_binance_fixture
+    seeded_config, httpx_mock, load_binance_fixture, monkeypatch
 ):
     base = "https://testnet.binancefuture.com"
     httpx_mock.add_response(
@@ -747,6 +747,27 @@ def test_moss_quant_update_sl_aborts_when_old_sl_still_open(
         is_optional=True,
     )
     httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/openAlgoOrders')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("get_open_algo_orders_sl_working"),
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/openAlgoOrders')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("get_open_algo_orders_sl_working"),
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/openAlgoOrders')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("get_open_algo_orders_sl_working"),
+        is_optional=True,
+    )
+    httpx_mock.add_response(
         method="DELETE",
         url=re.compile(rf"^{re.escape(base + '/fapi/v1/algoOrder')}(\?.*)?$"),
         status_code=200,
@@ -763,6 +784,9 @@ def test_moss_quant_update_sl_aborts_when_old_sl_still_open(
     )
 
     client = _client(seeded_config)
+    import trader
+
+    monkeypatch.setattr(trader, "_PROTECTIVE_CANCEL_RETRY_DELAY_SEC", 0.0)
 
     resp = client.post(
         "/api/binance/signals/ingest",
@@ -788,6 +812,116 @@ def test_moss_quant_update_sl_aborts_when_old_sl_still_open(
         r for r in httpx_mock.get_requests() if "/fapi/v1/algoOrder" in str(r.url) and r.method == "POST"
     ]
     assert place_calls == []
+
+
+def test_moss_quant_update_sl_retries_when_old_sl_clears_after_delay(
+    seeded_config, httpx_mock, load_binance_fixture, caplog, monkeypatch
+):
+    base = "https://testnet.binancefuture.com"
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/time')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("server_time"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/exchangeInfo')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("exchange_info_btcusdt"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v2/positionRisk')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("position_risk_open"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/positionSide/dual')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("position_side_single"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/premiumIndex')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("premium_index_btcusdt"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/openAlgoOrders')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("get_open_algo_orders_sl_working"),
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/openAlgoOrders')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("get_open_algo_orders_sl_working"),
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/openAlgoOrders')}(\?.*)?$"),
+        status_code=200,
+        json=[],
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="DELETE",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/algoOrder')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("cancel_order_success"),
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/algoOrder')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("place_algo_order_success"),
+        is_optional=True,
+    )
+
+    caplog.set_level("INFO")
+    client = _client(seeded_config)
+    import trader
+
+    monkeypatch.setattr(trader, "_PROTECTIVE_CANCEL_RETRY_DELAY_SEC", 0.0)
+
+    resp = client.post(
+        "/api/binance/signals/ingest",
+        json=_mq_payload(
+            api_signal_id="mq-update-sl-retry-1",
+            margin_usdt=None,
+            leverage=None,
+            entry_price=None,
+            tp_price=None,
+            sl_price=66800.0,
+            action="update_sl",
+            play="trailing_stop",
+        ),
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["traded"] == 1
+    log_text = caplog.text
+    assert "cancel protective orders pending retry symbol=BTCUSDT kind=SL attempt=1/3" in log_text
+    assert "cancel protective orders cleared symbol=BTCUSDT kind=SL" in log_text
+    assert "place protective order symbol=BTCUSDT kind=SL trigger=66800.0 qty=0.012" in log_text
 
 
 def test_moss_quant_rolling_bypasses_position_and_max_position_guards(
