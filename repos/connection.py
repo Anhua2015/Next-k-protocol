@@ -20,10 +20,14 @@ DEFAULT_CONFIG: Dict[str, str] = {
     "testnet": "false",
     "entry_type": "MARKET",
     "max_positions": "8",
+    # Moss 实仓来源：新库默认开启（已有键不会被 INSERT OR IGNORE 覆盖）
+    "src_moss_quant_enabled": "true",
 }
 
 _ENV_TO_CONFIG: Dict[str, str] = {
     "BINANCE_TESTNET": "testnet",
+    "BINANCE_ENABLED": "enabled",
+    "SRC_MOSS_QUANT_ENABLED": "src_moss_quant_enabled",
 }
 
 _PERF_INDEXES = [

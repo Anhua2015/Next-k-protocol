@@ -12,6 +12,8 @@
     BINANCE_API_KEY             币安 API Key
     BINANCE_API_SECRET          币安 API Secret
     BINANCE_TESTNET             测试网开关
+    BINANCE_ENABLED             全局交易开关 true/false（启动时写入 DB，覆盖已有值）
+    SRC_MOSS_QUANT_ENABLED      Moss 来源开关 true/false（同上；未设置时新库默认 true）
     DATA_DIR                    数据目录（默认当前目录）
 """
 
@@ -60,6 +62,7 @@ async def lifespan(app: FastAPI):
 
     import db
     db.init_db()
+    db.apply_env_config_overrides()
     logger.info("Database initialized: %s", str(db.DB_PATH))
 
     # Initialize Binance HTTP client (Phase 1)

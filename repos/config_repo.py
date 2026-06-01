@@ -1,9 +1,15 @@
 """Config 表读写。"""
 from __future__ import annotations
 
+import os
 from typing import Dict, Optional
 
 from repos.connection import get_db
+
+# 库中无对应键时的读取默认值（不影响已写入的 false）
+_SOURCE_ENABLED_DEFAULTS: Dict[str, str] = {
+    "moss_quant": "true",
+}
 
 
 def get_config(key: str, default: str = "") -> str:
@@ -42,7 +48,23 @@ def set_config_batch(pairs: Dict[str, str]) -> None:
 def source_enabled(source: str) -> bool:
     if not source:
         return False
-    return get_config(f"src_{source}_enabled", "false").lower() == "true"
+    default = _SOURCE_ENABLED_DEFAULTS.get(source, "false")
+    return get_config(f"src_{source}_enabled", default).lower() == "true"
+
+
+def apply_env_config_overrides() -> None:
+    """部署环境变量显式设置时覆盖 DB（用于 Railway 等，可纠正已有 Volume 里的 false）。"""
+    for env_key, config_key in (
+        ("BINANCE_ENABLED", "enabled"),
+        ("SRC_MOSS_QUANT_ENABLED", "src_moss_quant_enabled"),
+    ):
+        raw = os.getenv(env_key, "").strip()
+        if not raw:
+            continue
+        if raw.lower() in ("1", "true", "yes", "on"):
+            set_config(config_key, "true")
+        elif raw.lower() in ("0", "false", "no", "off"):
+            set_config(config_key, "false")
 
 
 def get_source_config(source: str, key_suffix: str, default: str = "") -> str:

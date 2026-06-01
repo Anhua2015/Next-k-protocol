@@ -18,6 +18,7 @@ from repos.connection import (
 
 # -- Config -----------------------------------------------------------
 from repos.config_repo import (
+    apply_env_config_overrides,
     get_all_config,
     get_config,
     set_config,
