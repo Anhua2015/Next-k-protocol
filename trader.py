@@ -185,7 +185,7 @@ def _algo_order_matches(
     kind: str,
     close_side: Optional[str],
     position_side: Optional[str],
-) -> bool:
+) -> tuple[bool, Optional[str]]:
     order_type = str(
         order.get("type")
         or order.get("origType")
@@ -194,26 +194,26 @@ def _algo_order_matches(
     ).upper()
     if kind == "SL":
         if "STOP" not in order_type or "TAKE_PROFIT" in order_type:
-            return False
+            return False, "type_mismatch"
     else:
         if "TAKE_PROFIT" not in order_type:
-            return False
+            return False, "type_mismatch"
 
     status = str(order.get("status") or order.get("algoStatus") or "").upper()
     if status in _TERMINAL_ALGO_STATUSES:
-        return False
+        return False, "terminal_status"
 
     if close_side:
         order_side = str(order.get("side") or "").upper()
         if order_side and order_side != close_side:
-            return False
+            return False, "side_mismatch"
 
     if position_side:
         order_pos_side = str(order.get("positionSide") or "").upper()
         if order_pos_side and order_pos_side != str(position_side).upper():
-            return False
+            return False, "position_side_mismatch"
 
-    return True
+    return True, None
 
 
 def _open_protective_algo_orders(
@@ -223,14 +223,25 @@ def _open_protective_algo_orders(
     close_side: Optional[str],
     position_side: Optional[str],
 ) -> list[Dict[str, Any]]:
+    raw_orders = get_open_algo_orders(symbol)
+    logger.info("openAlgoOrders raw symbol=%s count=%d", symbol, len(raw_orders))
     matched: list[Dict[str, Any]] = []
-    for order in get_open_algo_orders(symbol):
-        if not _algo_order_matches(
+    for order in raw_orders:
+        logger.info("openAlgoOrders raw %s", _algo_order_diag(order))
+        matched_order, reason = _algo_order_matches(
             order,
             kind=kind,
             close_side=close_side,
             position_side=position_side,
-        ):
+        )
+        if not matched_order:
+            logger.info(
+                "protective order skipped symbol=%s kind=%s %s reason=%s",
+                symbol,
+                kind,
+                _algo_order_diag(order),
+                reason or "unknown",
+            )
             continue
         matched.append(order)
     return matched
@@ -238,6 +249,22 @@ def _open_protective_algo_orders(
 
 def _algo_order_id(order: Dict[str, Any]) -> str:
     return str(order.get("algoId") or order.get("clientAlgoId") or "unknown")
+
+
+def _algo_order_diag(order: Dict[str, Any]) -> str:
+    return (
+        "algo_id={algo_id} symbol={symbol} side={side} position_side={position_side} "
+        "type={type_} orig_type={orig_type} algo_type={algo_type} status={status}"
+    ).format(
+        algo_id=_algo_order_id(order),
+        symbol=order.get("symbol") or "",
+        side=order.get("side") or "",
+        position_side=order.get("positionSide") or "",
+        type_=order.get("type") or "",
+        orig_type=order.get("origType") or "",
+        algo_type=order.get("algoType") or "",
+        status=order.get("status") or order.get("algoStatus") or "",
+    )
 
 
 def _cancel_open_protective_orders(

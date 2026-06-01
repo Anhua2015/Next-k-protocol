@@ -252,6 +252,108 @@ def test_moss_quant_update_sl_logs_cancel_and_place(
     assert "placed protective order symbol=BTCUSDT kind=SL" in log_text
 
 
+def test_moss_quant_update_sl_logs_raw_open_orders_and_skip_reason(
+    seeded_config, httpx_mock, load_binance_fixture, caplog
+):
+    base = "https://testnet.binancefuture.com"
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/time')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("server_time"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/exchangeInfo')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("exchange_info_btcusdt"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v2/positionRisk')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("position_risk_open"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/positionSide/dual')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("position_side_single"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/premiumIndex')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("premium_index_btcusdt"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/openAlgoOrders')}(\?.*)?$"),
+        status_code=200,
+        json=[
+            {
+                "algoId": 44444444,
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "positionSide": "BOTH",
+                "type": "STOP_MARKET",
+                "status": "WORKING",
+            }
+        ],
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/openAlgoOrders')}(\?.*)?$"),
+        status_code=200,
+        json=[],
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=re.compile(rf"^{re.escape(base + '/fapi/v1/algoOrder')}(\?.*)?$"),
+        status_code=200,
+        json=load_binance_fixture("place_algo_order_success"),
+        is_optional=True,
+    )
+
+    caplog.set_level("INFO")
+    client = _client(seeded_config)
+
+    resp = client.post(
+        "/api/binance/signals/ingest",
+        json=_mq_payload(
+            api_signal_id="mq-update-sl-raw-log-1",
+            margin_usdt=None,
+            leverage=None,
+            entry_price=None,
+            tp_price=None,
+            sl_price=66800.0,
+            action="update_sl",
+            play="trailing_stop",
+        ),
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["traded"] == 1
+    log_text = caplog.text
+    assert "openAlgoOrders raw symbol=BTCUSDT count=1" in log_text
+    assert "algo_id=44444444" in log_text
+    assert "protective order skipped symbol=BTCUSDT kind=SL" in log_text
+    assert "reason=side_mismatch" in log_text
+
+
 def test_moss_quant_update_sl_aborts_when_old_sl_still_open(
     seeded_config, httpx_mock, load_binance_fixture
 ):
