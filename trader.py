@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -170,6 +171,8 @@ def _place_protective(s, cs, sp, q, ps, ts, k):
 
 
 _TERMINAL_ALGO_STATUSES = {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FAILED"}
+_PROTECTIVE_CANCEL_RETRY_ATTEMPTS = 3
+_PROTECTIVE_CANCEL_RETRY_DELAY_SEC = 0.2
 
 
 def _position_side_for_live_pos(pos: Dict[str, Any], hedge_mode: bool) -> Optional[str]:
@@ -432,14 +435,30 @@ def _cancel_open_protective_orders(
                 ok,
             )
 
-    remaining = _open_protective_algo_orders(
-        symbol,
-        kind=kind,
-        close_side=close_side,
-        position_side=position_side,
-        actual_side=actual_side,
-        reference_price=reference_price,
-    )
+    remaining: list[Dict[str, Any]] = []
+    for attempt in range(_PROTECTIVE_CANCEL_RETRY_ATTEMPTS + 1):
+        remaining = _open_protective_algo_orders(
+            symbol,
+            kind=kind,
+            close_side=close_side,
+            position_side=position_side,
+            actual_side=actual_side,
+            reference_price=reference_price,
+        )
+        if not remaining:
+            break
+        if attempt >= _PROTECTIVE_CANCEL_RETRY_ATTEMPTS:
+            break
+        logger.warning(
+            "cancel protective orders pending retry symbol=%s kind=%s attempt=%d/%d delay_sec=%.3f algo_ids=%s",
+            symbol,
+            kind,
+            attempt + 1,
+            _PROTECTIVE_CANCEL_RETRY_ATTEMPTS,
+            _PROTECTIVE_CANCEL_RETRY_DELAY_SEC,
+            ",".join(_algo_order_id(order) for order in remaining),
+        )
+        time.sleep(_PROTECTIVE_CANCEL_RETRY_DELAY_SEC)
     if remaining:
         logger.error(
             "stale protective orders remain symbol=%s kind=%s close_side=%s position_side=%s algo_ids=%s",
