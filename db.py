@@ -22,6 +22,7 @@ from repos.config_repo import (
     get_config,
     set_config,
     set_config_batch,
+    source_enabled,
 )
 
 # -- Signals ----------------------------------------------------------
