@@ -65,7 +65,7 @@ class SignalItem(BaseModel):
     )
     close_price: Optional[float] = Field(
         None,
-        description="建议平仓价，仅用于日志记录；实盘按 MARKET 成交",
+        description="建议平仓价；有值时按 LIMIT 减仓，否则 MARKET",
     )
     confidence: Optional[str] = Field(
         None,

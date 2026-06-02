@@ -490,6 +490,8 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
     requested_side = str(signal["side"]).upper()
     source = signal.get("source", "") or ""
 
+    from binance.exchange_info import round_price as _round_price
+
     live_pos = get_live_position(symbol)
     if not live_pos:
         update_signal_status(signal_log_id, "error", "live_position_missing")
@@ -515,13 +517,26 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
 
     try:
         cancel_all_orders(symbol)
+        _, tick_size, _ = _get_filters(symbol)
+        close_side = "SELL" if actual_side == "LONG" else "BUY"
+        close_raw = signal.get("close_price")
+        use_limit = close_raw is not None and float(close_raw) > 0
         params: Dict[str, Any] = {
             "symbol": symbol,
-            "side": "SELL" if actual_side == "LONG" else "BUY",
-            "type": "MARKET",
+            "side": close_side,
             "quantity": qty,
-            "reduceOnly": "true",
         }
+        if use_limit:
+            limit_price = _round_price(float(close_raw), tick_size)
+            params.update(
+                {
+                    "type": "LIMIT",
+                    "timeInForce": "GTC",
+                    "price": limit_price,
+                }
+            )
+        else:
+            params.update({"type": "MARKET", "reduceOnly": "true"})
         if position_side:
             params["positionSide"] = position_side
             params.pop("reduceOnly", None)
@@ -805,7 +820,9 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
         return False
 
     entry_type = get_config("entry_type", "MARKET").upper()
-    if action == "rolling":
+    if source == "moss_quant" and action in ("open", ""):
+        entry_type = "LIMIT"
+    elif action == "rolling":
         entry_type = "MARKET"
 
     # Setup: filters + leverage + margin type + hedge mode

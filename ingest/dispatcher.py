@@ -20,6 +20,22 @@ def dispatch(sig: Any, signal_log_id: int) -> Dict[str, Any]:
         "symbol": symbol, "side": side, "source": source,
     }
 
+    action = (getattr(sig, "action", None) or "").lower()
+    if not action and "rolling" in (sig.play or "").lower():
+        action = "rolling"
+    if not action:
+        action = "open"
+    if source == "moss_quant" and action in ("update_sl", "update_tp"):
+        import db as _d
+
+        _d.update_signal_status(
+            signal_log_id,
+            "skipped",
+            "moss_quant: exchange SL/TP disabled",
+        )
+        detail["action"] = "skipped_no_protective"
+        return detail
+
     try:
         signal_dict = {
             "signal_log_id": signal_log_id,
@@ -41,7 +57,7 @@ def dispatch(sig: Any, signal_log_id: int) -> Dict[str, Any]:
             "play": sig.play or "",
             "profile_id": sig.profile_id,
             "client_ref": sig.client_ref or "",
-            "action": sig.action or ("rolling" if "rolling" in (sig.play or "").lower() else "open"),
+            "action": action,
         }
         ok = execute_trade(signal_dict)
         detail["action"] = "traded" if ok else "error"
