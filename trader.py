@@ -520,7 +520,11 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
         _, tick_size, _ = _get_filters(symbol)
         close_side = "SELL" if actual_side == "LONG" else "BUY"
         close_raw = signal.get("close_price")
-        use_limit = close_raw is not None and float(close_raw) > 0
+        use_limit = (
+            source != "moss_quant"
+            and close_raw is not None
+            and float(close_raw) > 0
+        )
         params: Dict[str, Any] = {
             "symbol": symbol,
             "side": close_side,
@@ -821,7 +825,7 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
 
     entry_type = get_config("entry_type", "MARKET").upper()
     if source == "moss_quant" and action in ("open", ""):
-        entry_type = "LIMIT"
+        entry_type = "MARKET"
     elif action == "rolling":
         entry_type = "MARKET"
 

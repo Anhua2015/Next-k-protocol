@@ -42,7 +42,7 @@ def _mq_payload(**overrides):
 
 def test_moss_quant_source_accepted(seeded_config, mock_binance):
     mock_binance.all(
-        place_order="place_order_limit_ack",
+        place_order="place_order_market_filled",
         position_risk="position_risk_closed",
     )
     client = _client(seeded_config)
@@ -105,7 +105,7 @@ def test_moss_quant_rolling_forces_market_when_global_entry_type_is_limit(
 
 def test_moss_quant_close_bypasses_open_position_guard(seeded_config, mock_binance):
     mock_binance.all(
-        place_order="place_order_limit_ack",
+        place_order="place_order_market_filled",
         position_risk="position_risk_open",
     )
     client = _client(seeded_config)
@@ -159,9 +159,9 @@ def test_moss_quant_update_sl_skipped_no_exchange_protective(
     assert body["details"][0]["action"] == "skipped_no_protective"
 
 
-def test_moss_quant_open_without_sl_tp_uses_limit(seeded_config, mock_binance):
+def test_moss_quant_open_without_sl_tp_uses_market(seeded_config, mock_binance):
     mock_binance.all(
-        place_order="place_order_limit_ack",
+        place_order="place_order_market_filled",
         position_risk="position_risk_closed",
     )
     client = _client(seeded_config)
@@ -169,7 +169,7 @@ def test_moss_quant_open_without_sl_tp_uses_limit(seeded_config, mock_binance):
     resp = client.post(
         "/api/binance/signals/ingest",
         json=_mq_payload(
-            api_signal_id="mq-open-limit-no-sl",
+            api_signal_id="mq-open-market-no-sl",
             sl_price=None,
             tp_price=None,
         ),
@@ -181,7 +181,7 @@ def test_moss_quant_open_without_sl_tp_uses_limit(seeded_config, mock_binance):
     logs = client.get(
         "/api/binance/signals?source=moss_quant&limit=5", headers=AUTH
     ).json()
-    assert logs[0]["status"] == "submitted"
+    assert logs[0]["status"] == "traded"
 
 
 def test_moss_quant_update_sl_logs_cancel_and_place(
