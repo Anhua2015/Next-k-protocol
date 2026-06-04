@@ -142,7 +142,11 @@ def open_market(
     )
     from observability.metrics import TRADES_OPENED
     TRADES_OPENED.labels(source=source, side=side, entry_type="MARKET").inc()
-    logger.info("Opened %s %s source=%s qty=%s entry=%.6f sl=%.6f tp=%.6f",
-                side, symbol, source, qty, actual_entry, final_sl_p, final_tp_p)
+    sl_log = f"{final_sl_p:.6f}" if final_sl_p is not None else "-"
+    tp_log = f"{final_tp_p:.6f}" if final_tp_p is not None else "-"
+    logger.info(
+        "Opened %s %s source=%s qty=%s entry=%.6f sl=%s tp=%s",
+        side, symbol, source, qty, actual_entry, sl_log, tp_log,
+    )
     return MarketEntryResult(ok=True, qty=qty, entry_price=actual_entry,
                              entry_order_id=entry_order_id, position_side=position_side)
