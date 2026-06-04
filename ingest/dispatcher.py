@@ -25,13 +25,15 @@ def dispatch(sig: Any, signal_log_id: int) -> Dict[str, Any]:
         action = "rolling"
     if not action:
         action = "open"
-    if source == "moss_quant" and action in ("update_sl", "update_tp"):
+    from moss_lane import is_moss_source
+
+    if is_moss_source(source) and action in ("update_sl", "update_tp"):
         import db as _d
 
         _d.update_signal_status(
             signal_log_id,
             "skipped",
-            "moss_quant: exchange SL/TP disabled",
+            "moss: exchange SL/TP disabled",
         )
         detail["action"] = "skipped_no_protective"
         return detail

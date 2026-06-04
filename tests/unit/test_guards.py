@@ -62,6 +62,9 @@ class TestGuardInvalidSource:
     def test_moss_quant_valid(self):
         assert not guard_invalid_source(FakeSignal(source="moss_quant"), None).skip
 
+    def test_moss2_valid(self):
+        assert not guard_invalid_source(FakeSignal(source="moss2"), None).skip
+
 
 class TestGuardSourceDisabled:
     def test_enabled_passes(self):
