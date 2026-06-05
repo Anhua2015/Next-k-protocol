@@ -48,16 +48,35 @@ def set_config_batch(pairs: Dict[str, str]) -> None:
 def source_enabled(source: str) -> bool:
     if not source:
         return False
-    default = _SOURCE_ENABLED_DEFAULTS.get(source, "false")
+    from moss_lane import MOSS_SOURCES, active_moss_lane, is_moss_source
+
+    if is_moss_source(source):
+        if source != active_moss_lane():
+            return False
+        default = "true"
+    else:
+        default = _SOURCE_ENABLED_DEFAULTS.get(source, "false")
     return get_config(f"src_{source}_enabled", default).lower() == "true"
+
+
+def apply_moss_lane_config() -> str:
+    """按 MOSS_ACTIVE_LANE 互斥启用 src_moss_quant / src_moss2（默认 moss2）。"""
+    from moss_lane import active_moss_lane
+
+    lane = active_moss_lane()
+    set_config_batch(
+        {
+            "moss_active_lane": lane,
+            "src_moss_quant_enabled": "true" if lane == "moss_quant" else "false",
+            "src_moss2_enabled": "true" if lane == "moss2" else "false",
+        }
+    )
+    return lane
 
 
 def apply_env_config_overrides() -> None:
     """部署环境变量显式设置时覆盖 DB（用于 Railway 等，可纠正已有 Volume 里的 false）。"""
-    for env_key, config_key in (
-        ("BINANCE_ENABLED", "enabled"),
-        ("SRC_MOSS_QUANT_ENABLED", "src_moss_quant_enabled"),
-    ):
+    for env_key, config_key in (("BINANCE_ENABLED", "enabled"),):
         raw = os.getenv(env_key, "").strip()
         if not raw:
             continue
@@ -65,6 +84,8 @@ def apply_env_config_overrides() -> None:
             set_config(config_key, "true")
         elif raw.lower() in ("0", "false", "no", "off"):
             set_config(config_key, "false")
+    # Moss 槽位：始终以 MOSS_ACTIVE_LANE 互斥（禁止 moss_quant + moss2 同时 ingest）
+    apply_moss_lane_config()
 
 
 def get_source_config(source: str, key_suffix: str, default: str = "") -> str:

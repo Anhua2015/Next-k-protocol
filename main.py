@@ -13,7 +13,7 @@
     BINANCE_API_SECRET          币安 API Secret
     BINANCE_TESTNET             测试网开关
     BINANCE_ENABLED             全局交易开关 true/false（启动时写入 DB，覆盖已有值）
-    SRC_MOSS_QUANT_ENABLED      Moss 来源开关 true/false（同上；未设置时新库默认 true）
+    Moss 实盘槽见 moss_lane.py（默认 moss2），启动时自动写入 DB
     DATA_DIR                    数据目录（默认当前目录）
 """
 

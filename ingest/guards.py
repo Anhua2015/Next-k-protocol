@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger("ingest.guards")
 
-VALID_SOURCES = {"zct_vwap", "momentum", "jiezhen", "moss_quant"}
+VALID_SOURCES = {"zct_vwap", "momentum", "jiezhen", "moss_quant", "moss2"}
 
 
 @dataclass
