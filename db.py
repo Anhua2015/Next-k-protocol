@@ -23,14 +23,12 @@ from repos.config_repo import (
     get_config,
     set_config,
     set_config_batch,
-    source_enabled,
 )
 
 # -- Signals ----------------------------------------------------------
 from repos.signals_repo import (
     insert_signal,
     list_signals,
-    log_trade_event,
     update_execution as update_signal_execution,
     update_status as update_signal_status,
 )

@@ -15,23 +15,19 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
 import db as _db
-from trader import execute_trade
 from models import (
     AccountSummaryOut,
-    ClosePositionRequest,
     ConfigUpdate,
     LivePositionOut,
     SignalIngestRequest,
     SignalIngestResult,
     SignalLogOut,
     StatusOut,
-    UpdateSlRequest,
 )
 
 logger = logging.getLogger("router")
@@ -44,24 +40,6 @@ router = APIRouter(
 _ENV_ONLY_KEYS = {"binance_api_key", "binance_api_secret"}
 
 
-def _now_utc() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _model_payload(body) -> dict:
-    return body.model_dump() if hasattr(body, "model_dump") else body.dict()
-
-
-def _safe_log_trade_event(**kwargs) -> None:
-    try:
-        _db.log_trade_event(**kwargs)
-    except Exception as exc:
-        logger.warning(
-            "trade event log failed: action=%s source=%s type=%s",
-            kwargs.get("action"), kwargs.get("source"), type(exc).__name__,
-        )
-
-
 # ---------------------------------------------------------------------------
 # Health（公开）
 # ---------------------------------------------------------------------------
@@ -70,7 +48,7 @@ def _safe_log_trade_event(**kwargs) -> None:
 @router.get(
     "/health",
     summary="健康检查（无需鉴权）",
-    description="服务存活探针，用于 Railway 部署检测和负载均衡健康检查。不校验 token。",
+    description="服务存活探针，用于 Railway 部署检测和负载均衡健康检查。",
     include_in_schema=True,
 )
 async def health():
@@ -117,7 +95,6 @@ async def get_status():
     - **testnet**：是否使用币安测试网。true=测试网（testnet.binancefuture.com），false=主网。
     - **open_positions**：当前正在运行的持仓数量。
     - **max_positions**：历史配置项，ingest 不再据此拦截信号。
-    - **position_expire_hours**：持仓过期时限（小时），到期自动强平。
     - **api_key_set**：币安 API Key 是否已配置。
     - **db_path**：SQLite 数据库文件路径。
     """
@@ -137,7 +114,6 @@ async def get_status():
         max_positions=cfg.get("max_positions", "8"),
         api_key_set=bool(os.getenv("BINANCE_API_KEY", "").strip()),
         db_path=str(_db.DB_PATH),
-        strategy_positions={},
     )
 
 
@@ -262,7 +238,7 @@ async def ingest_signals(body: SignalIngestRequest):
     from ingest.pipeline import process_signal_batch
 
     with _db._db_write_lock:
-        result_data = process_signal_batch(body.signals, _db, 0, {}, {})
+        result_data = process_signal_batch(body.signals, _db)
 
     return result_data
 
@@ -311,24 +287,6 @@ async def list_signals(
 # ---------------------------------------------------------------------------
 # Positions
 # ---------------------------------------------------------------------------
-
-
-@router.post(
-    "/positions/close",
-    summary="平仓（由 next-k-api trail 退出触发）",
-    description="取消 SL/TP 条件单，MARKET 平仓，记录 PnL。由 next-k-api 纸面 trail 检查触发退出后调用。",
-)
-async def close_position(body: ClosePositionRequest):
-    raise HTTPException(status_code=410, detail="position_lifecycle_removed")
-
-
-@router.put(
-    "/positions/{position_id}/sl",
-    summary="动态修改止损价（Moss Quant 移动止损）",
-    description="取消当前 SL 条件单，以新价格重新下 STOP_MARKET 条件单并更新持仓记录。",
-)
-async def update_position_sl(position_id: int, body: UpdateSlRequest):
-    raise HTTPException(status_code=410, detail="position_lifecycle_removed")
 
 
 @router.get(

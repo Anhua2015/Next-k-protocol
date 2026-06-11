@@ -4,8 +4,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.characterization
-AUTH = {"X-Maintenance-Token": "test-token"}
-
 
 def test_open_signal_without_margin_is_rejected_at_execution(seeded_config, mock_binance):
     import main
@@ -24,7 +22,6 @@ def test_open_signal_without_margin_is_rejected_at_execution(seeded_config, mock
                 }
             ]
         },
-        headers=AUTH,
     )
 
     assert resp.status_code == 200
@@ -47,7 +44,7 @@ def test_config_endpoint_omits_binance_credentials(seeded_config):
     import main
 
     client = TestClient(main.app)
-    resp = client.get("/api/binance/config", headers=AUTH)
+    resp = client.get("/api/binance/config")
 
     assert resp.status_code == 200
     body = resp.json()
@@ -62,7 +59,6 @@ def test_config_endpoint_rejects_binance_credentials_updates(seeded_config):
     resp = client.post(
         "/api/binance/config",
         json={"pairs": {"binance_api_key": "new-key"}},
-        headers=AUTH,
     )
 
     assert resp.status_code == 400

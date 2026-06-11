@@ -6,8 +6,6 @@ from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.characterization
 
-AUTH = {"X-Maintenance-Token": "test-token"}
-
 
 def _client(seeded_config):
     import importlib
@@ -38,7 +36,7 @@ def test_sl_placement_fail_triggers_emergency_close(seeded_config, mock_binance)
     )
     mock_binance("place_algo", "error_2019_insufficient_margin", status_code=400)
     client = _client(seeded_config)
-    resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
+    resp = client.post("/api/binance/signals/ingest", json=_payload())
     body = resp.json()
     assert body["errors"] == 1
 
@@ -54,5 +52,5 @@ def test_tp_skipped_when_no_tp_price(seeded_config, mock_binance):
         "play": "PLAY01",
     }]}
     client = _client(seeded_config)
-    resp = client.post("/api/binance/signals/ingest", json=payload, headers=AUTH)
+    resp = client.post("/api/binance/signals/ingest", json=payload)
     assert resp.json()["traded"] == 1

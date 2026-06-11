@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict
 
 from models import SignalIngestResult
@@ -15,18 +15,11 @@ logger = logging.getLogger("ingest.pipeline")
 @dataclass
 class IngestContext:
     db: Any
-    max_pos: int = 8
-    play_max: Dict[str, int] = field(default_factory=dict)
-    source_max: Dict[str, int] = field(default_factory=dict)
 
 
-def process_signal_batch(
-    signals, db_module, max_pos: int,
-    play_max: Dict[str, int], source_max: Dict[str, int],
-) -> SignalIngestResult:
+def process_signal_batch(signals, db_module) -> SignalIngestResult:
     """处理一批信号，返回 SignalIngestResult。"""
-    ctx = IngestContext(db=db_module, max_pos=max_pos,
-                        play_max=play_max, source_max=source_max)
+    ctx = IngestContext(db=db_module)
 
     from observability.metrics import SIGNALS_RECEIVED
     result = {"scanned": 0, "traded": 0, "skipped": 0, "errors": 0, "details": []}

@@ -6,8 +6,6 @@ from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.characterization
 
-AUTH = {"X-Maintenance-Token": "test-token"}
-
 
 def _client(seeded_config):
     import importlib
@@ -46,11 +44,11 @@ def test_limit_entry_records_submitted_status(seeded_config, mock_binance):
     )
     client = _client(seeded_config)
 
-    resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
+    resp = client.post("/api/binance/signals/ingest", json=_payload())
 
     assert resp.status_code == 200
     assert resp.json()["traded"] == 1
-    logs = client.get("/api/binance/signals?limit=10", headers=AUTH).json()
+    logs = client.get("/api/binance/signals?limit=10").json()
     assert logs[0]["status"] == "submitted"
 
 
@@ -62,7 +60,6 @@ def test_limit_entry_missing_entry_price_errors(seeded_config, mock_binance):
     resp = client.post(
         "/api/binance/signals/ingest",
         json=_payload(entry_price=None, api_signal_id="l-002"),
-        headers=AUTH,
     )
 
     assert resp.json()["errors"] == 1

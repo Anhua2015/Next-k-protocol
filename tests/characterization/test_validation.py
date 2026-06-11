@@ -6,8 +6,6 @@ from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.characterization
 
-AUTH = {"X-Maintenance-Token": "test-token"}
-
 
 def _client(seeded_config):
     import importlib
@@ -34,10 +32,10 @@ def _payload():
 def test_sl_distance_too_close_warns_but_continues(
     seeded_config, mock_binance, caplog,
 ):
-    """SL very close to mark — current code logs warning, doesn't reject."""
+    """SL very close to mark - current code logs warning, doesn't reject."""
     mock_binance.all()
     client = _client(seeded_config)
-    resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
+    resp = client.post("/api/binance/signals/ingest", json=_payload())
     assert resp.json()["traded"] in (0, 1)
 
 
@@ -53,5 +51,5 @@ def test_min_notional_below_threshold_returns_error(seeded_config, mock_binance)
         "entry_price": 67250.5, "sl_price": 66500.0, "tp_price": 68500.0,
         "play": "PLAY01",
     }]}
-    resp = client.post("/api/binance/signals/ingest", json=payload, headers=AUTH)
+    resp = client.post("/api/binance/signals/ingest", json=payload)
     assert resp.json()["errors"] == 1

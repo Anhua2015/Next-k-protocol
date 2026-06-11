@@ -6,8 +6,6 @@ from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.characterization
 
-AUTH = {"X-Maintenance-Token": "test-token"}
-
 
 def _client(seeded_config):
     import importlib
@@ -33,7 +31,7 @@ def _payload():
 def test_hedge_mode_includes_position_side(seeded_config, mock_binance, httpx_mock):
     mock_binance.all(position_side="position_side_dual", position_risk="position_risk_closed")
     client = _client(seeded_config)
-    resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
+    resp = client.post("/api/binance/signals/ingest", json=_payload())
     assert resp.json()["traded"] == 1
     order_calls = [
         r for r in httpx_mock.get_requests()
@@ -45,7 +43,7 @@ def test_hedge_mode_includes_position_side(seeded_config, mock_binance, httpx_mo
 def test_one_way_mode_omits_position_side(seeded_config, mock_binance, httpx_mock):
     mock_binance.all(position_side="position_side_single", position_risk="position_risk_closed")
     client = _client(seeded_config)
-    resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
+    resp = client.post("/api/binance/signals/ingest", json=_payload())
     assert resp.json()["traded"] == 1
     order_calls = [
         r for r in httpx_mock.get_requests()

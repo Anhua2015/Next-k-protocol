@@ -37,6 +37,11 @@ def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
     """去重：insert_signal 返回 None = 已存在。"""
     from binance.time_sync import now_utc
     payload = _signal_payload(sig)
+    action = (getattr(sig, "action", None) or "").strip().lower()
+    if not action and "rolling" in (sig.play or "").lower():
+        action = "rolling"
+    if not action:
+        action = "open"
     sid = ctx.db.insert_signal(
         source=sig.source, api_signal_id=sig.api_signal_id,
         symbol=sig.symbol, side=sig.side,
@@ -46,9 +51,7 @@ def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
         play=sig.play or "",
         profile_id=getattr(sig, "profile_id", None),
         client_ref=getattr(sig, "client_ref", None) or "",
-        action=getattr(sig, "action", None) or (
-            "rolling" if "rolling" in (sig.play or "").lower() else "open"
-        ),
+        action=action,
         payload_json=json.dumps(payload, ensure_ascii=False, default=str),
     )
     if sid is None:

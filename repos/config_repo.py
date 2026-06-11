@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Optional
+from typing import Dict
 
 from repos.connection import get_db
+
 
 def get_config(key: str, default: str = "") -> str:
     with get_db() as conn:
@@ -39,11 +40,6 @@ def set_config_batch(pairs: Dict[str, str]) -> None:
             )
 
 
-def source_enabled(_source: str) -> bool:
-    """Protocol 不做策略开关；保留接口供 db 层兼容。"""
-    return True
-
-
 def apply_env_config_overrides() -> None:
     """部署环境变量显式设置时覆盖 DB（用于 Railway 等，可纠正已有 Volume 里的 false）。"""
     for env_key, config_key in (("BINANCE_ENABLED", "enabled"),):
@@ -54,89 +50,3 @@ def apply_env_config_overrides() -> None:
             set_config(config_key, "true")
         elif raw.lower() in ("0", "false", "no", "off"):
             set_config(config_key, "false")
-
-
-def get_source_config(source: str, key_suffix: str, default: str = "") -> str:
-    if not source:
-        return default
-    return get_config(f"src_{source}_{key_suffix}", default)
-
-
-def count_open_by_source(source: str) -> int:
-    if not source:
-        return 0
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM positions "
-            "WHERE status IN ('open','pending_entry') AND source=?",
-            (source,),
-        ).fetchone()
-    return row["cnt"] if row else 0
-
-
-def count_open_by_play(play: Optional[str]) -> int:
-    if not play:
-        return 0
-    p = str(play).strip().upper()
-    if p.startswith("PLAY01"):
-        prefix = "PLAY01%"
-    elif p.startswith("PLAY02"):
-        prefix = "PLAY02%"
-    elif p.startswith("PLAY03"):
-        prefix = "PLAY03%"
-    else:
-        return 0
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM positions "
-            "WHERE status IN ('open','pending_entry') AND play LIKE ?",
-            (prefix,),
-        ).fetchone()
-    return row["cnt"] if row else 0
-
-
-def count_open_total() -> int:
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM positions "
-            "WHERE status IN ('open','pending_entry')"
-        ).fetchone()
-    return row["cnt"] if row else 0
-
-
-def _compute_expire_at(expire_hours: float) -> str:
-    from datetime import datetime, timedelta, timezone
-    return (datetime.now(timezone.utc) + timedelta(hours=expire_hours)).isoformat()
-
-
-def _resolve_expire_hours(play: Optional[str], source: str = "") -> float:
-    if source:
-        val = get_source_config(source, "expire_hours", "")
-        if val:
-            try:
-                return float(val)
-            except ValueError:
-                pass
-    if play:
-        p = str(play).strip().upper()
-        if p.startswith("PLAY01"):
-            val = get_config("expire_hours_play01", "")
-        elif p.startswith("PLAY02"):
-            val = get_config("expire_hours_play02", "")
-        elif p.startswith("PLAY03"):
-            val = get_config("expire_hours_play03", "")
-        else:
-            val = ""
-        if val:
-            try:
-                return float(val)
-            except ValueError:
-                pass
-    if source:
-        val = get_source_config(source, "expire_hours", "")
-        if val:
-            try:
-                return float(val)
-            except ValueError:
-                pass
-    return 4.0

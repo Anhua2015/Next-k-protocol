@@ -77,8 +77,6 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Binance HTTP client initialized")
 
-    logger.info("Lifecycle scheduler removed; execution runs without embedded jobs")
-
     yield
     logger.info("Next K Protocol shutting down")
 

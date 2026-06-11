@@ -26,7 +26,7 @@ class SignalItem(BaseModel):
 
     source: str = Field(
         "orb",
-        description="信号来源标识，固定为 'orb'",
+        description="信号来源标识，如 'orb'",
     )
     api_signal_id: str = Field(
         ...,
@@ -44,12 +44,12 @@ class SignalItem(BaseModel):
     margin_usdt: Optional[float] = Field(
         None,
         gt=0,
-        description="本次交易保证金（USDT）；开仓/滚仓必填，平仓/更新止损可为空",
+        description="本次交易保证金（USDT）；开仓/滚仓必填，平仓可为空",
     )
     leverage: Optional[float] = Field(
         None,
         gt=0,
-        description="本次交易杠杆；开仓/滚仓必填，平仓/更新止损可为空",
+        description="本次交易杠杆；开仓/滚仓必填，平仓可为空",
     )
     entry_price: Optional[float] = Field(
         None,
@@ -57,7 +57,7 @@ class SignalItem(BaseModel):
     )
     sl_price: Optional[float] = Field(
         None,
-        description="止损价格；开仓/滚仓时用于初始保护单，update_sl 时表示新的止损价格",
+        description="止损价格；开仓时用于初始保护单",
     )
     tp_price: Optional[float] = Field(
         None,
@@ -81,7 +81,7 @@ class SignalItem(BaseModel):
     )
     profile_id: Optional[int] = Field(
         None,
-        description="Moss Quant Profile ID，用于将实仓归属到单个机器人",
+        description="可选的调用方 profile 标识",
     )
     client_ref: Optional[str] = Field(
         None,
@@ -89,7 +89,7 @@ class SignalItem(BaseModel):
     )
     action: Optional[str] = Field(
         "open",
-        description="动作类型：open / rolling / close / update_sl / update_tp / exchange_sl / exchange_tp / external_close",
+        description="动作类型：open / rolling / close",
     )
 
 
@@ -98,7 +98,7 @@ class SignalIngestRequest(BaseModel):
 
     signals: List[SignalItem] = Field(
         ...,
-        description="待处理的信号列表，通常来自一次 ZCT 扫描的全部新信号",
+        description="待处理的信号列表",
         min_length=0,
         max_length=100,
     )
@@ -115,53 +115,6 @@ class SignalIngestResult(BaseModel):
         default_factory=list,
         description="每条信号的处理详情",
     )
-
-
-class UpdateSlRequest(BaseModel):
-    """动态修改止损价请求，由 Moss Quant 移动止损触发。"""
-
-    new_sl_price: float = Field(
-        ...,
-        description="新的止损触发价格",
-    )
-    profile_id: Optional[int] = Field(None, description="Moss Quant Profile ID")
-    client_ref: Optional[str] = Field(None, description="调用方动作引用 ID")
-
-
-class ClosePositionRequest(BaseModel):
-    """平仓请求，由 next-k-api 在 trail 触发退出后推送。"""
-
-    source: str = Field(
-        ...,
-        description="信号来源：orb",
-    )
-    api_signal_id: str = Field(
-        ...,
-        description="原始纸面信号 ID，用于关联 signals_log",
-    )
-    symbol: str = Field(
-        ...,
-        description="交易对符号",
-    )
-    side: str = Field(
-        ...,
-        description="持仓方向：LONG / SHORT",
-        pattern="^(LONG|SHORT)$",
-    )
-    exit_rule: str = Field(
-        ...,
-        description="退出原因：trail_stop / trail_low / trail_tier1 / trail_tier2 / expired",
-    )
-    close_price: Optional[float] = Field(
-        None,
-        description="建议平仓价（纸面记录的退出价），实盘按 MARKET 成交",
-    )
-    position_id: Optional[int] = Field(
-        None,
-        description="指定平仓的持仓 ID。Moss Quant 同 symbol 多仓时需精确指定",
-    )
-    profile_id: Optional[int] = Field(None, description="Moss Quant Profile ID")
-    client_ref: Optional[str] = Field(None, description="调用方动作引用 ID")
 
 
 class LivePositionOut(BaseModel):
@@ -199,30 +152,12 @@ class SignalLogOut(BaseModel):
     )
     skip_reason: Optional[str] = Field(None, description="跳过/失败原因")
     play: Optional[str] = Field(None, description="策略子类型")
-    profile_id: Optional[int] = Field(None, description="Moss Quant Profile ID")
+    profile_id: Optional[int] = Field(None, description="调用方 profile 标识")
     client_ref: Optional[str] = Field(None, description="调用方动作引用 ID")
     action: Optional[str] = Field(None, description="动作类型")
     position_id: Optional[int] = Field(None, description="关联持仓 ID")
     payload_json: Optional[str] = Field(None, description="动作请求快照 JSON")
     result_json: Optional[str] = Field(None, description="动作结果快照 JSON")
-
-
-class DailyPnl(BaseModel):
-    """每日 PnL 汇总。"""
-
-    day: str = Field(..., description="日期（YYYY-MM-DD，UTC）")
-    pnl: float = Field(..., description="当日总盈亏（USDT）")
-
-
-class PnlSummaryOut(BaseModel):
-    """聚合 P&L 汇总。"""
-
-    total: int = Field(..., description="总交易笔数（已平仓）")
-    wins: int = Field(..., description="盈利笔数")
-    losses: int = Field(..., description="亏损笔数")
-    total_pnl: float = Field(..., description="累计总盈亏（USDT）")
-    avg_pnl: float = Field(..., description="平均单笔盈亏（USDT）")
-    daily: List[DailyPnl] = Field(default_factory=list, description="近 30 日每日 PnL 明细")
 
 
 class AccountSummaryOut(BaseModel):
@@ -241,15 +176,3 @@ class StatusOut(BaseModel):
     max_positions: str = Field(..., description="全局最大持仓数")
     api_key_set: bool = Field(..., description="币安 API Key 是否已配置")
     db_path: str = Field(..., description="SQLite 数据库文件路径")
-    strategy_positions: dict = Field(
-        default_factory=dict,
-        description="各策略持仓数，如 {'orb': 3}",
-    )
-
-
-class HealthOut(BaseModel):
-    """健康检查响应。"""
-
-    status: str = Field("ok", description="服务状态：'ok' 表示正常运行")
-    module: str = Field("next-k-protocol", description="服务名称")
-    version: str = Field("1.0.0", description="服务版本号")

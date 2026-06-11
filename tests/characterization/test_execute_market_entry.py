@@ -6,8 +6,6 @@ from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.characterization
 
-AUTH = {"X-Maintenance-Token": "test-token"}
-
 
 def _client(seeded_config):
     import importlib
@@ -39,11 +37,11 @@ def _payload(**overrides):
 def test_market_entry_full_flow(seeded_config, mock_binance):
     mock_binance.all(position_risk="position_risk_closed")
     client = _client(seeded_config)
-    resp = client.post("/api/binance/signals/ingest", json=_payload(), headers=AUTH)
+    resp = client.post("/api/binance/signals/ingest", json=_payload())
     body = resp.json()
     assert body["traded"] == 1
     mock_binance.all(position_risk="position_risk_open")
-    pos_list = client.get("/api/binance/positions?status=open", headers=AUTH).json()
+    pos_list = client.get("/api/binance/positions?status=open").json()
     assert len(pos_list) == 1
     assert pos_list[0]["symbol"] == "BTCUSDT"
     assert pos_list[0]["side"] == "LONG"
@@ -61,7 +59,6 @@ def test_market_entry_short_uses_sell_side(seeded_config, mock_binance):
             side="SHORT", api_signal_id="m-002",
             sl_price=68000.0, tp_price=66000.0,
         ),
-        headers=AUTH,
     )
     assert resp.json()["traded"] == 1
 
@@ -73,7 +70,6 @@ def test_market_entry_min_notional_rejection(seeded_config, mock_binance):
     resp = client.post(
         "/api/binance/signals/ingest",
         json=_payload(margin_usdt=0.01, leverage=1.0),
-        headers=AUTH,
     )
     body = resp.json()
     assert body["errors"] == 1
@@ -86,6 +82,5 @@ def test_market_entry_invalid_margin_returns_error(seeded_config, mock_binance):
     resp = client.post(
         "/api/binance/signals/ingest",
         json=_payload(margin_usdt=0),
-        headers=AUTH,
     )
     assert resp.status_code == 422

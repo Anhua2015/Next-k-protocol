@@ -20,11 +20,9 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures" / "binance"
 def _env_baseline(tmp_path, monkeypatch):
     """Set deterministic env vars + isolate DB to tmpdir for every test."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("PROTOCOL_MAINTENANCE_TOKEN", "test-token")
     monkeypatch.setenv("BINANCE_TESTNET", "true")
     monkeypatch.setenv("BINANCE_API_KEY", "test-key")
     monkeypatch.setenv("BINANCE_API_SECRET", "test-secret")
-    monkeypatch.setenv("EMBED_SCHEDULER", "0")
     monkeypatch.delenv("PROTOCOL_CORS_ORIGINS", raising=False)
     # Unset system proxy vars so httpx.Client() doesn't try SOCKS
     for _proxy_var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
@@ -64,10 +62,7 @@ def seeded_config(fresh_db):
     # Clear modules that cache db references across test reloads.
     for _mod in ("ingest.pipeline", "ingest.guards", "ingest.dispatcher",
                  "trading.market_entry", "trading.limit_entry",
-                 "lifecycle.close", "lifecycle.sync", "lifecycle.reconcile",
-                 "lifecycle.expire",
-                 "repos.connection", "repos.config_repo", "repos.signals_repo",
-                 "repos.positions_repo", "repos.pnl_repo"):
+                 "repos.connection", "repos.config_repo", "repos.signals_repo"):
         sys.modules.pop(_mod, None)
     # Also clear db facade so it re-imports from repos
     sys.modules.pop("db", None)

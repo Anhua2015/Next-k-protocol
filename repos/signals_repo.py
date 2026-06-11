@@ -5,7 +5,6 @@ import json
 import sqlite3
 from typing import Any, Dict, List, Optional
 
-from binance.time_sync import now_utc
 from repos.connection import get_db
 
 
@@ -124,47 +123,3 @@ def list_signals(
             params,
         ).fetchall()
     return [dict(r) for r in rows]
-
-
-def log_trade_event(
-    source: str,
-    action: str,
-    symbol: str,
-    side: str,
-    api_signal_id: str,
-    status: str = "received",
-    profile_id: Optional[int] = None,
-    position_id: Optional[int] = None,
-    client_ref: Optional[str] = "",
-    payload: Optional[Dict[str, Any]] = None,
-    result: Optional[Dict[str, Any]] = None,
-    *,
-    entry_price: Optional[float] = None,
-    sl_price: Optional[float] = None,
-    tp_price: Optional[float] = None,
-    notional_usdt: Optional[float] = None,
-    play: Optional[str] = None,
-    skip_reason: Optional[str] = None,
-) -> Optional[int]:
-    return insert_signal(
-        source=source,
-        api_signal_id=api_signal_id,
-        symbol=symbol,
-        side=side,
-        entry_price=entry_price,
-        sl_price=sl_price,
-        tp_price=tp_price,
-        confidence=None,
-        regime=None,
-        notional_usdt=notional_usdt,
-        received_at=now_utc(),
-        status=status,
-        skip_reason=skip_reason,
-        play=play,
-        profile_id=profile_id,
-        client_ref=client_ref or "",
-        action=action or "open",
-        position_id=position_id,
-        payload_json=json.dumps(payload) if payload is not None else None,
-        result_json=json.dumps(result) if result is not None else None,
-    )

@@ -1,12 +1,4 @@
-"""Binance Futures 执行层。
-
-Phase 1-3 重构：
-- HTTP/签名/交易所信息 → binance/
-- 订单/条件单/protective → binance/ + trading/
-- 生命周期(同步/对账/过期/平仓) → lifecycle/
-
-trader.py 保留：execute_trade + facade 重新导出 + auth fail 状态。
-"""
+"""Binance Futures 执行层：接收 ingest 信号并调用 trading/ 下单。"""
 from __future__ import annotations
 
 import logging
@@ -571,201 +563,7 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
     return True
 
 
-def _update_live_stop_loss(signal: Dict[str, Any]) -> bool:
-    signal_log_id = signal["signal_log_id"]
-    symbol = signal["symbol"]
-    side = str(signal["side"]).upper()
-    new_sl_price = signal.get("sl_price")
-    if new_sl_price is None:
-        update_signal_status(signal_log_id, "error", "missing_sl_price")
-        return False
-
-    live_pos = get_live_position(symbol)
-    if not live_pos:
-        update_signal_status(signal_log_id, "error", "live_position_missing")
-        return False
-
-    amt = float(live_pos.get("positionAmt") or 0)
-    if amt == 0:
-        update_signal_status(signal_log_id, "error", "live_position_missing")
-        return False
-
-    actual_side = "LONG" if amt > 0 else "SHORT"
-    if side != actual_side:
-        update_signal_status(
-            signal_log_id,
-            "error",
-            f"side_mismatch:{side}->{actual_side}",
-        )
-        return False
-
-    hedge_mode = _detect_hedge_mode()
-    position_side = _position_side_for_live_pos(live_pos, hedge_mode)
-    qty = abs(amt)
-    mark_px = float(live_pos.get("markPrice") or get_mark_price(symbol) or 0)
-    close_side = "SELL" if actual_side == "LONG" else "BUY"
-    logger.info(
-        "update_sl context symbol=%s requested_side=%s actual_side=%s hedge_mode=%s "
-        "close_side=%s position_side=%s qty=%s mark_price=%s new_sl=%s live_pos={%s}",
-        symbol,
-        side,
-        actual_side,
-        hedge_mode,
-        close_side,
-        position_side or "BOTH",
-        qty,
-        mark_px,
-        new_sl_price,
-        _live_pos_diag(live_pos),
-    )
-    try:
-        step_size, tick_size, _min_notional = _get_filters(symbol)
-        _validate_sl_distance(actual_side, float(new_sl_price), mark_px, tick_size)
-        _cancel_open_protective_orders(
-            symbol,
-            kind="SL",
-            close_side=close_side,
-            position_side=position_side,
-            actual_side=actual_side,
-            reference_price=mark_px,
-        )
-        resp = _place_protective(
-            symbol,
-            close_side,
-            _round_price(float(new_sl_price), tick_size),
-            _round_quantity(qty, step_size),
-            position_side,
-            tick_size,
-            "SL",
-        )
-    except Exception as exc:
-        logger.error("update live stop failed %s %s: %s", actual_side, symbol, exc)
-        update_signal_status(signal_log_id, "error", f"update_sl_failed: {exc}")
-        return False
-
-    update_signal_status(signal_log_id, "traded", None)
-    from repos.signals_repo import update_execution
-
-    update_execution(
-        signal_log_id,
-        status="traded",
-        result={
-            "action": "update_sl",
-            "symbol": symbol,
-            "side": actual_side,
-            "quantity": qty,
-            "mark_price": mark_px,
-            "new_sl_price": float(new_sl_price),
-            "sl_order": resp,
-        },
-        payload={
-            "symbol": symbol,
-            "side": side,
-            "new_sl_price": float(new_sl_price),
-            "client_ref": signal.get("client_ref") or "",
-        },
-    )
-    return True
-
-
-def _update_live_take_profit(signal: Dict[str, Any]) -> bool:
-    signal_log_id = signal["signal_log_id"]
-    symbol = signal["symbol"]
-    side = str(signal["side"]).upper()
-    new_tp_price = signal.get("tp_price")
-    if new_tp_price is None:
-        update_signal_status(signal_log_id, "error", "missing_tp_price")
-        return False
-
-    live_pos = get_live_position(symbol)
-    if not live_pos:
-        update_signal_status(signal_log_id, "error", "live_position_missing")
-        return False
-
-    amt = float(live_pos.get("positionAmt") or 0)
-    if amt == 0:
-        update_signal_status(signal_log_id, "error", "live_position_missing")
-        return False
-
-    actual_side = "LONG" if amt > 0 else "SHORT"
-    if side != actual_side:
-        update_signal_status(
-            signal_log_id,
-            "error",
-            f"side_mismatch:{side}->{actual_side}",
-        )
-        return False
-
-    hedge_mode = _detect_hedge_mode()
-    position_side = _position_side_for_live_pos(live_pos, hedge_mode)
-    qty = abs(amt)
-    mark_px = float(live_pos.get("markPrice") or get_mark_price(symbol) or 0)
-    close_side = "SELL" if actual_side == "LONG" else "BUY"
-    logger.info(
-        "update_tp context symbol=%s requested_side=%s actual_side=%s hedge_mode=%s "
-        "close_side=%s position_side=%s qty=%s mark_price=%s new_tp=%s live_pos={%s}",
-        symbol,
-        side,
-        actual_side,
-        hedge_mode,
-        close_side,
-        position_side or "BOTH",
-        qty,
-        mark_px,
-        new_tp_price,
-        _live_pos_diag(live_pos),
-    )
-    try:
-        step_size, tick_size, _min_notional = _get_filters(symbol)
-        _validate_tp_distance(actual_side, float(new_tp_price), mark_px, tick_size)
-        _cancel_open_protective_orders(
-            symbol,
-            kind="TP",
-            close_side=close_side,
-            position_side=position_side,
-            actual_side=actual_side,
-            reference_price=mark_px,
-        )
-        resp = _place_protective(
-            symbol,
-            close_side,
-            _round_price(float(new_tp_price), tick_size),
-            _round_quantity(qty, step_size),
-            position_side,
-            tick_size,
-            "TP",
-        )
-    except Exception as exc:
-        logger.error("update live TP failed %s %s: %s", actual_side, symbol, exc)
-        update_signal_status(signal_log_id, "error", f"update_tp_failed: {exc}")
-        return False
-
-    update_signal_status(signal_log_id, "traded", None)
-    from repos.signals_repo import update_execution
-
-    update_execution(
-        signal_log_id,
-        status="traded",
-        result={
-            "action": "update_tp",
-            "symbol": symbol,
-            "side": actual_side,
-            "quantity": qty,
-            "mark_price": mark_px,
-            "new_tp_price": float(new_tp_price),
-            "tp_order": resp,
-        },
-        payload={
-            "symbol": symbol,
-            "side": side,
-            "new_tp_price": float(new_tp_price),
-            "client_ref": signal.get("client_ref") or "",
-        },
-    )
-    return True
-
-
-# -- execute_trade (Phase 4: orchestrator, delegates to trading/) ------------
+# -- execute_trade (orchestrator, delegates to trading/) --------------------
 
 def execute_trade(signal: Dict[str, Any]) -> bool:
     """开仓调度：读配置→设杠杆/保证金→dispatch MARKET/LIMIT。"""
@@ -779,15 +577,15 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     play = signal.get("play", "") or ""
     action = str(signal.get("action", "") or "").lower()
 
+    if get_config("enabled", "false").lower() != "true":
+        update_signal_status(signal_log_id, "error", "trading_disabled")
+        return False
+
     logger.info("execute_trade: source=%s symbol=%s side=%s play=%s id=%s",
                 source, symbol, side, play, signal_log_id)
 
     if action == "close":
         return _close_live_position(signal)
-    if action == "update_sl":
-        return _update_live_stop_loss(signal)
-    if action == "update_tp":
-        return _update_live_take_profit(signal)
 
     # Resolve margin/leverage
     try:
@@ -844,6 +642,3 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
             step_size, tick_size, min_notional, hedge, mark_px, source, play,
         )
         return result.ok
-
-
-# -- Lifecycle re-exports (Phase 3) ------------------------------------------
