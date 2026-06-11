@@ -21,7 +21,7 @@ def _client(seeded_config):
 
 def _payload(**overrides):
     base = {
-        "source": "zct_vwap",
+        "source": "orb",
         "api_signal_id": "m-001",
         "symbol": "BTCUSDT",
         "side": "LONG",

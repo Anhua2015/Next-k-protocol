@@ -78,7 +78,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
     if [[ -f "$ENV_EXAMPLE" ]]; then
         warn ".env.oi 不存在，从 .env.oi.example 复制..."
         cp "$ENV_EXAMPLE" "$ENV_FILE"
-        warn "请编辑 $ENV_FILE 并设置 PROTOCOL_MAINTENANCE_TOKEN 等必要变量后重新启动。"
+        warn "请编辑 $ENV_FILE 并设置 BINANCE_API_KEY、BINANCE_API_SECRET 等变量后重新启动。"
     else
         warn ".env.oi 和 .env.oi.example 均不存在，将使用默认配置启动。"
     fi

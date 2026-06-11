@@ -22,15 +22,15 @@ class ConfigUpdate(BaseModel):
 
 
 class SignalItem(BaseModel):
-    """单条 ZCT 信号，由 next-k-api 在扫描完成后推送。"""
+    """单条 ORB 信号，由 next-k-api 在扫描完成后推送。"""
 
     source: str = Field(
-        "zct_vwap",
-        description="信号来源标识，如 'zct_vwap'",
+        "orb",
+        description="信号来源标识，固定为 'orb'",
     )
     api_signal_id: str = Field(
         ...,
-        description="accumulation.db 中 zct_vwap_signals 表的主键 ID，用于去重",
+        description="调用方生成的唯一 ID，用于去重",
     )
     symbol: str = Field(
         ...,
@@ -65,7 +65,7 @@ class SignalItem(BaseModel):
     )
     close_price: Optional[float] = Field(
         None,
-        description="建议平仓价；moss_quant 仅日志，其它来源有值时 LIMIT 减仓否则 MARKET",
+        description="建议平仓价；有值时 LIMIT 减仓，否则 MARKET",
     )
     confidence: Optional[str] = Field(
         None,
@@ -77,7 +77,7 @@ class SignalItem(BaseModel):
     )
     play: Optional[str] = Field(
         None,
-        description="策略子类型标记。ZCT VWAP: PLAY01/PLAY02/PLAY03；动量/接针: 可空",
+        description="策略子类型标记，ORB 可空",
     )
     profile_id: Optional[int] = Field(
         None,
@@ -109,7 +109,7 @@ class SignalIngestResult(BaseModel):
 
     scanned: int = Field(0, description="本次推送的信号总数")
     traded: int = Field(0, description="成功开仓的信号数")
-    skipped: int = Field(0, description="跳过的信号数（重复/持仓冲突/仓位已满）")
+    skipped: int = Field(0, description="跳过的信号数（通常为重复 api_signal_id）")
     errors: int = Field(0, description="处理失败的信号数")
     details: List[Dict[str, Any]] = Field(
         default_factory=list,
@@ -133,7 +133,7 @@ class ClosePositionRequest(BaseModel):
 
     source: str = Field(
         ...,
-        description="信号来源：momentum / jiezhen",
+        description="信号来源：orb",
     )
     api_signal_id: str = Field(
         ...,
@@ -182,7 +182,7 @@ class SignalLogOut(BaseModel):
     """信号日志记录（API 返回）。"""
 
     id: int = Field(..., description="信号日志主键 ID")
-    source: str = Field(..., description="信号来源标识，如 'zct_vwap'")
+    source: str = Field(..., description="信号来源标识，如 'orb'")
     api_signal_id: str = Field(..., description="原始信号 ID（用于去重）")
     symbol: str = Field(..., description="交易对符号")
     side: str = Field(..., description="信号方向：LONG / SHORT")
@@ -243,7 +243,7 @@ class StatusOut(BaseModel):
     db_path: str = Field(..., description="SQLite 数据库文件路径")
     strategy_positions: dict = Field(
         default_factory=dict,
-        description="各策略持仓数，如 {'zct_vwap':3, 'momentum':1, 'jiezhen':2}",
+        description="各策略持仓数，如 {'orb': 3}",
     )
 
 

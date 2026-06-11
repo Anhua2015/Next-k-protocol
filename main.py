@@ -1,6 +1,6 @@
 """Next K Protocol — 币安实盘交易 API 服务。
 
-独立于 next-k-api，通过 HTTP 接口接收 ZCT 信号并执行币安合约交易。
+独立于 next-k-api，通过 HTTP 接口接收 ORB 信号并执行币安合约交易。
 支持 Railway 一键部署，Swagger /docs 交互文档。
 
 启动方式：
@@ -8,12 +8,10 @@
     ./start.sh
 
 环境变量（.env.oi 或系统环境变量）：
-    PROTOCOL_MAINTENANCE_TOKEN  鉴权 token
     BINANCE_API_KEY             币安 API Key
     BINANCE_API_SECRET          币安 API Secret
     BINANCE_TESTNET             测试网开关
     BINANCE_ENABLED             全局交易开关 true/false（启动时写入 DB，覆盖已有值）
-    Moss 实盘槽见 moss_lane.py（默认 moss2），启动时自动写入 DB
     DATA_DIR                    数据目录（默认当前目录）
 """
 
@@ -101,7 +99,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["X-Maintenance-Token", "Authorization", "Content-Type"],
+    allow_headers=["Content-Type"],
 )
 
 from router import router

@@ -6,12 +6,6 @@ from typing import Dict, Optional
 
 from repos.connection import get_db
 
-# 库中无对应键时的读取默认值（不影响已写入的 false）
-_SOURCE_ENABLED_DEFAULTS: Dict[str, str] = {
-    "moss_quant": "true",
-}
-
-
 def get_config(key: str, default: str = "") -> str:
     with get_db() as conn:
         row = conn.execute(
@@ -45,33 +39,9 @@ def set_config_batch(pairs: Dict[str, str]) -> None:
             )
 
 
-def source_enabled(source: str) -> bool:
-    if not source:
-        return False
-    from moss_lane import MOSS_SOURCES, active_moss_lane, is_moss_source
-
-    if is_moss_source(source):
-        if source != active_moss_lane():
-            return False
-        default = "true"
-    else:
-        default = _SOURCE_ENABLED_DEFAULTS.get(source, "false")
-    return get_config(f"src_{source}_enabled", default).lower() == "true"
-
-
-def apply_moss_lane_config() -> str:
-    """按 MOSS_ACTIVE_LANE 互斥启用 src_moss_quant / src_moss2（默认 moss2）。"""
-    from moss_lane import active_moss_lane
-
-    lane = active_moss_lane()
-    set_config_batch(
-        {
-            "moss_active_lane": lane,
-            "src_moss_quant_enabled": "true" if lane == "moss_quant" else "false",
-            "src_moss2_enabled": "true" if lane == "moss2" else "false",
-        }
-    )
-    return lane
+def source_enabled(_source: str) -> bool:
+    """Protocol 不做策略开关；保留接口供 db 层兼容。"""
+    return True
 
 
 def apply_env_config_overrides() -> None:
@@ -84,8 +54,6 @@ def apply_env_config_overrides() -> None:
             set_config(config_key, "true")
         elif raw.lower() in ("0", "false", "no", "off"):
             set_config(config_key, "false")
-    # Moss 槽位：始终以 MOSS_ACTIVE_LANE 互斥（禁止 moss_quant + moss2 同时 ingest）
-    apply_moss_lane_config()
 
 
 def get_source_config(source: str, key_suffix: str, default: str = "") -> str:
@@ -142,15 +110,13 @@ def _compute_expire_at(expire_hours: float) -> str:
 
 
 def _resolve_expire_hours(play: Optional[str], source: str = "") -> float:
-    # 动量/接针：按 source 读取
-    if source and source in ("momentum", "jiezhen"):
+    if source:
         val = get_source_config(source, "expire_hours", "")
         if val:
             try:
                 return float(val)
             except ValueError:
                 pass
-    # ZCT VWAP：按 play 读取
     if play:
         p = str(play).strip().upper()
         if p.startswith("PLAY01"):

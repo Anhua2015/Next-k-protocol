@@ -21,7 +21,7 @@ def _client(seeded_config):
 
 def _payload():
     return {"signals": [{
-        "source": "zct_vwap", "api_signal_id": "v-001",
+        "source": "orb", "api_signal_id": "v-001",
         "symbol": "BTCUSDT", "side": "LONG",
         "margin_usdt": 100.0,
         "leverage": 10.0,
@@ -46,7 +46,7 @@ def test_min_notional_below_threshold_returns_error(seeded_config, mock_binance)
     mock_binance.all(position_risk="position_risk_closed")
     client = _client(seeded_config)
     payload = {"signals": [{
-        "source": "zct_vwap", "api_signal_id": "v-002",
+        "source": "orb", "api_signal_id": "v-002",
         "symbol": "BTCUSDT", "side": "LONG",
         "margin_usdt": 0.0001,
         "leverage": 1.0,

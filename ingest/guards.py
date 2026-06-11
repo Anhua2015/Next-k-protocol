@@ -1,18 +1,16 @@
 """信号摄入守卫链。
 
-每个 guard 返回 GuardDecision(skip, reason, action, signal_log_id)。
-任一 guard skip=True → 跳过本次信号。
+Protocol 仅作跳板：记录信号并转发币安，不做策略侧限制。
+仅保留 api_signal_id 去重，避免 HTTP 重试重复下单。
 """
 from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("ingest.guards")
-
-VALID_SOURCES = {"zct_vwap", "momentum", "jiezhen", "moss_quant", "moss2"}
 
 
 @dataclass
@@ -21,28 +19,6 @@ class GuardDecision:
     reason: str = ""
     action: str = ""
     signal_log_id: Optional[int] = None
-
-
-def guard_trading_disabled(sig: Any, _ctx: Any) -> GuardDecision:
-    """交易总开关关闭时全部跳过（在 pipeline 层面处理，此 guard 保留占位）。"""
-    return GuardDecision(skip=False)
-
-
-def guard_invalid_source(sig: Any, _ctx: Any) -> GuardDecision:
-    if sig.source not in VALID_SOURCES:
-        return GuardDecision(skip=True, reason=f"invalid source={sig.source}",
-                             action="skipped_invalid_source")
-    return GuardDecision(skip=False)
-
-
-def guard_source_disabled(sig: Any, ctx: Any) -> GuardDecision:
-    if ctx.db.source_enabled(sig.source):
-        return GuardDecision(skip=False)
-    return GuardDecision(
-        skip=True,
-        reason=f"source disabled: {sig.source}",
-        action="skipped_source_disabled",
-    )
 
 
 def _signal_payload(sig: Any) -> Dict[str, Any]:
@@ -80,77 +56,4 @@ def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
     return GuardDecision(skip=False, signal_log_id=sid)
 
 
-def _signal_action(sig: Any) -> str:
-    action = getattr(sig, "action", None) or ""
-    if action:
-        return str(action).lower()
-    play = (getattr(sig, "play", None) or "").lower()
-    if "rolling" in play:
-        return "rolling"
-    return "open"
-
-
-def _symbol_has_live_position(symbol: str) -> bool:
-    from trader import list_live_positions
-
-    sym = str(symbol or "").upper()
-    for pos in list_live_positions():
-        if str(pos.get("symbol") or "").upper() == sym:
-            amt = float(pos.get("positionAmt") or pos.get("quantity") or 0)
-            if amt != 0:
-                return True
-    return False
-
-
-def guard_position_exists(sig: Any, ctx: Any) -> GuardDecision:
-    """开仓/加仓：同 symbol 已有持仓则跳过。"""
-    if _signal_action(sig) != "open":
-        return GuardDecision(skip=False)
-    if _symbol_has_live_position(sig.symbol):
-        return GuardDecision(
-            skip=True,
-            reason="open position for symbol",
-            action="skipped_position_exists",
-        )
-    return GuardDecision(skip=False)
-
-
-def guard_close_requires_position(sig: Any, ctx: Any) -> GuardDecision:
-    """平仓：无持仓则跳过。"""
-    if _signal_action(sig) != "close":
-        return GuardDecision(skip=False)
-    if _symbol_has_live_position(sig.symbol):
-        return GuardDecision(skip=False)
-    return GuardDecision(
-        skip=True,
-        reason="no open position for symbol",
-        action="skipped_no_position",
-    )
-
-
-def guard_max_positions(sig: Any, ctx: Any) -> GuardDecision:
-    """仅开仓/加仓时按全局最大持仓数检查。"""
-    from trader import list_live_positions
-
-    if _signal_action(sig) != "open":
-        return GuardDecision(skip=False)
-
-    max_pos = ctx.max_pos
-    if len(list_live_positions()) >= max_pos:
-        return GuardDecision(
-            skip=True,
-            reason=f"global max={max_pos}",
-            action="skipped_max_positions",
-        )
-    return GuardDecision(skip=False)
-
-
-GUARDS = [
-    guard_trading_disabled,
-    guard_invalid_source,
-    guard_dedup_insert,
-    guard_source_disabled,
-    guard_position_exists,
-    guard_close_requires_position,
-    guard_max_positions,
-]
+GUARDS = [guard_dedup_insert]

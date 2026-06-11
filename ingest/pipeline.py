@@ -59,14 +59,7 @@ def _process_one(sig, ctx: IngestContext) -> Dict[str, Any]:
     logger.info("ingest signal: source=%s id=%s symbol=%s side=%s play=%s",
                 sig.source, sig.api_signal_id, sig.symbol, sig.side, sig.play)
 
-    # 交易总开关
-    if ctx.db.get_config("enabled", "false").lower() != "true":
-        from observability.metrics import SIGNALS_SKIPPED
-        SIGNALS_SKIPPED.labels(source=sig.source, code="disabled").inc()
-        detail["action"] = "skipped_disabled"
-        return detail
-
-    # 守卫链
+    # 守卫链（仅去重）
     dedup_signal_log_id = None
     for guard in GUARDS:
         decision = guard(sig, ctx)

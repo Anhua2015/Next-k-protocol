@@ -1,7 +1,7 @@
 """Shared test fixtures.
 
 Goals:
-- Each test gets a fresh SQLite file under tmp dir — no shared state.
+- Each test gets a fresh SQLite file under tmp dir (no shared state).
 - Env vars set to a deterministic baseline before db.init_db() runs.
 - A reusable `load_binance_fixture` helper for JSON response replay.
 """

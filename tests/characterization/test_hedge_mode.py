@@ -21,7 +21,7 @@ def _client(seeded_config):
 
 def _payload():
     return {"signals": [{
-        "source": "zct_vwap", "api_signal_id": "h-001",
+        "source": "orb", "api_signal_id": "h-001",
         "symbol": "BTCUSDT", "side": "LONG",
         "margin_usdt": 100.0,
         "leverage": 10.0,

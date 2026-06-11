@@ -21,7 +21,7 @@ def _client(seeded_config):
 
 def _payload():
     return {"signals": [{
-        "source": "zct_vwap", "api_signal_id": "p-001",
+        "source": "orb", "api_signal_id": "p-001",
         "symbol": "BTCUSDT", "side": "LONG",
         "margin_usdt": 100.0,
         "leverage": 10.0,
@@ -46,7 +46,7 @@ def test_sl_placement_fail_triggers_emergency_close(seeded_config, mock_binance)
 def test_tp_skipped_when_no_tp_price(seeded_config, mock_binance):
     mock_binance.all(position_risk="position_risk_closed")
     payload = {"signals": [{
-        "source": "zct_vwap", "api_signal_id": "p-002",
+        "source": "orb", "api_signal_id": "p-002",
         "symbol": "BTCUSDT", "side": "LONG",
         "margin_usdt": 100.0,
         "leverage": 10.0,

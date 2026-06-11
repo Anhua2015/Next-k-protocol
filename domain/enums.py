@@ -10,9 +10,7 @@ class Side(StrEnum):
 
 
 class Source(StrEnum):
-    ZCT_VWAP = "zct_vwap"
-    MOMENTUM = "momentum"
-    JIEZHEN = "jiezhen"
+    ORB = "orb"
 
 
 class EntryType(StrEnum):

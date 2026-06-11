@@ -520,13 +520,7 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
         _, tick_size, _ = _get_filters(symbol)
         close_side = "SELL" if actual_side == "LONG" else "BUY"
         close_raw = signal.get("close_price")
-        from moss_lane import is_moss_source
-
-        use_limit = (
-            not is_moss_source(source)
-            and close_raw is not None
-            and float(close_raw) > 0
-        )
+        use_limit = close_raw is not None and float(close_raw) > 0
         params: Dict[str, Any] = {
             "symbol": symbol,
             "side": close_side,
@@ -821,16 +815,8 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
                              f"invalid margin={margin} leverage={leverage}")
         return False
 
-    if get_config("enabled", "false").lower() != "true":
-        update_signal_status(signal_log_id, "skipped_disabled", "trading disabled")
-        return False
-
     entry_type = get_config("entry_type", "MARKET").upper()
-    from moss_lane import is_moss_source
-
-    if is_moss_source(source) and action in ("open", ""):
-        entry_type = "MARKET"
-    elif action == "rolling":
+    if action == "rolling":
         entry_type = "MARKET"
 
     # Setup: filters + leverage + margin type + hedge mode
