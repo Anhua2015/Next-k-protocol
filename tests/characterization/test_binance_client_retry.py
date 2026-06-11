@@ -98,5 +98,5 @@ def test_401_does_not_retry(seeded_config, httpx_mock, load_binance_fixture):
     with pytest.raises(Exception):
         get_mark_price("BTCUSDT")
     calls = [r for r in httpx_mock.get_requests() if "premiumIndex" in str(r.url)]
-    # 401 should NOT retry — exactly 1 call
+    # 401 should NOT retry - exactly 1 call
     assert len(calls) >= 1

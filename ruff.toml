@@ -4,4 +4,4 @@ ignore = ["E501", "B904"]
 exclude = [".venv", ".git", "__pycache__", "tests"]
 
 [lint.isort]
-known-first-party = ["binance", "trading", "lifecycle", "ingest", "repos", "domain", "common", "observability", "routers"]
+known-first-party = ["binance", "trading", "ingest", "repos", "observability", "routers"]

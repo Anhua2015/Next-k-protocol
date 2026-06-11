@@ -20,10 +20,6 @@ DEFAULT_CONFIG: Dict[str, str] = {
     "testnet": "false",
     "entry_type": "MARKET",
     "max_positions": "8",
-    # Moss：由 MOSS_ACTIVE_LANE 启动时写入，新库默认均关
-    "src_moss_quant_enabled": "false",
-    "src_moss2_enabled": "false",
-    "moss_active_lane": "moss2",
 }
 
 _ENV_TO_CONFIG: Dict[str, str] = {

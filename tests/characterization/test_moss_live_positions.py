@@ -9,8 +9,6 @@ from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.characterization
 
-AUTH = {"X-Maintenance-Token": "test-token"}
-
 
 def _client():
     for mod in ("main", "router", "trader"):
@@ -25,7 +23,7 @@ def test_positions_open_reads_binance_position_risk(seeded_config, mock_binance)
     mock_binance.all(position_risk="position_risk_open")
     client = _client()
 
-    resp = client.get("/api/binance/positions?status=open", headers=AUTH)
+    resp = client.get("/api/binance/positions?status=open")
 
     assert resp.status_code == 200
     body = resp.json()
@@ -37,7 +35,7 @@ def test_positions_open_reads_binance_position_risk(seeded_config, mock_binance)
 def test_positions_closed_is_gone(seeded_config):
     client = _client()
 
-    resp = client.get("/api/binance/positions?status=closed", headers=AUTH)
+    resp = client.get("/api/binance/positions?status=closed")
 
     assert resp.status_code == 410
 
@@ -53,7 +51,7 @@ def test_positions_upstream_failure_returns_502(seeded_config, monkeypatch):
     monkeypatch.setattr(trader, "list_live_positions", boom)
     client = _client()
 
-    resp = client.get("/api/binance/positions?status=open", headers=AUTH)
+    resp = client.get("/api/binance/positions?status=open")
 
     assert resp.status_code == 502
     assert resp.json()["detail"] == "positions_failed_upstream_401"
@@ -62,6 +60,6 @@ def test_positions_upstream_failure_returns_502(seeded_config, monkeypatch):
 def test_pnl_summary_endpoint_removed(seeded_config):
     client = _client()
 
-    resp = client.get("/api/binance/pnl/summary", headers=AUTH)
+    resp = client.get("/api/binance/pnl/summary")
 
     assert resp.status_code in (404, 410)
