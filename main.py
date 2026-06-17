@@ -78,6 +78,10 @@ async def lifespan(app: FastAPI):
     logger.info("Binance HTTP client initialized")
 
     yield
+    from binance.client import client as binance_client
+    if binance_client is not None:
+        binance_client.close()
+        logger.info("Binance HTTP client closed")
     logger.info("Next K Protocol shutting down")
 
 

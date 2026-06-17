@@ -11,6 +11,8 @@ from typing import Any, Callable
 
 import pytest
 
+from binance.client import client as binance_client
+
 BASE = "https://testnet.binancefuture.com"
 
 PATH_MAP = {
@@ -91,3 +93,19 @@ def mock_binance(httpx_mock, load_binance_fixture):
 
     _set.all = _set_all
     return _set
+
+
+@pytest.fixture(autouse=True)
+def _close_binance_client_after_test():
+    """Ensure the global BinanceClient is closed after each characterization test.
+
+    Prevents ``ResourceWarning: unclosed <ssl.SSLSocket>`` from httpx connection
+    pools that are created during lifespan startup (time sync / exchange info).
+    """
+    yield
+    c = binance_client
+    if c is not None:
+        try:
+            c.close()
+        except Exception:
+            pass
