@@ -19,6 +19,8 @@ jobs:
           # 连上服务器后，GitHub 会帮你自动敲以下三行命令：
           script: |
             cd /home/ubuntu/next-k/Next-k-protocol  # 👈 改成你服务器上项目的绝对路径
-            git pull origin release
-            bash stop.sh 
+            git fetch origin release
+            git checkout release
+            git reset --hard origin/release
+            bash stop.sh
             bash start.sh       # 👈 改成你重启服务的脚本或命令
