@@ -40,13 +40,23 @@ def set_config_batch(pairs: Dict[str, str]) -> None:
             )
 
 
+def _env_bool_to_config(raw: str) -> str | None:
+    if raw.lower() in ("1", "true", "yes", "on"):
+        return "true"
+    if raw.lower() in ("0", "false", "no", "off"):
+        return "false"
+    return None
+
+
 def apply_env_config_overrides() -> None:
-    """部署环境变量显式设置时覆盖 DB（用于 Railway 等，可纠正已有 Volume 里的 false）。"""
-    for env_key, config_key in (("BINANCE_ENABLED", "enabled"),):
+    """部署环境变量显式设置时覆盖 DB（用于 Railway 等，可纠正 Volume 里陈旧配置）。"""
+    for env_key, config_key in (
+        ("BINANCE_ENABLED", "enabled"),
+        ("BINANCE_TESTNET", "testnet"),
+    ):
         raw = os.getenv(env_key, "").strip()
         if not raw:
             continue
-        if raw.lower() in ("1", "true", "yes", "on"):
-            set_config(config_key, "true")
-        elif raw.lower() in ("0", "false", "no", "off"):
-            set_config(config_key, "false")
+        value = _env_bool_to_config(raw)
+        if value is not None:
+            set_config(config_key, value)
