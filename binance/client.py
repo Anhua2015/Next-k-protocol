@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, Optional
 
 import httpx
 
+from common.exceptions import BinanceAuthError
 from binance.signing import make_headers, sign
 from binance.time_sync import (
     RECV_WINDOW_MS,
@@ -76,6 +77,22 @@ class BinanceClient:
 
     def _sync_server_time(self) -> None:
         do_sync(self._base_url(), self._http_sync)
+
+    @staticmethod
+    def _notify_auth_success() -> None:
+        try:
+            from trader import notify_binance_auth_success
+            notify_binance_auth_success()
+        except Exception:
+            logger.debug("auth success hook skipped", exc_info=True)
+
+    @staticmethod
+    def _notify_auth_fail(context: str) -> None:
+        try:
+            from trader import notify_binance_auth_fail
+            notify_binance_auth_fail(context)
+        except Exception:
+            logger.exception("auth fail hook failed context=%s", context)
 
     # -- Core request -----------------------------------------------------
 
@@ -155,8 +172,15 @@ class BinanceClient:
                         inner["signature"] = self._sign(inner)
                         params = inner
                         continue
+                    if resp.status_code in (401, 403) and signed:
+                        self._notify_auth_fail(f"{method} {path}")
+                        raise BinanceAuthError(
+                            f"{method} {path} -> {resp.status_code}: {resp.text[:200]}"
+                        )
                     resp.raise_for_status()
 
+                if signed:
+                    self._notify_auth_success()
                 if as_text:
                     return resp.text.strip()
                 return resp.json()

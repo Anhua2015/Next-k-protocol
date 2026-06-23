@@ -10,9 +10,10 @@
 环境变量（.env.oi 或系统环境变量）：
     BINANCE_API_KEY             币安 API Key
     BINANCE_API_SECRET          币安 API Secret
-    BINANCE_TESTNET             测试网开关（启动时写入 DB，覆盖已有值）
-    BINANCE_ENABLED             全局交易开关 true/false（启动时写入 DB，覆盖已有值）
+    BINANCE_TESTNET             是否连接测试网（true/false，仅选网络，不控制是否下单）
     DATA_DIR                    数据目录（默认当前目录）
+
+交易开关、入场类型、持仓上限等由 next-k-api 在信号侧控制；Protocol 收到 ingest 即执行。
 """
 
 from __future__ import annotations
@@ -60,16 +61,19 @@ async def lifespan(app: FastAPI):
 
     import db
     db.init_db()
-    db.apply_env_config_overrides()
     logger.info("Database initialized: %s", str(db.DB_PATH))
+
+    def _binance_testnet() -> bool:
+        return os.getenv("BINANCE_TESTNET", "false").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
 
     # Initialize Binance HTTP client (Phase 1)
     from binance.client import init_client
-    from db import get_config
     init_client(
         base_url_fn=lambda: (
             "https://testnet.binancefuture.com"
-            if get_config("testnet", "false").lower() == "true"
+            if _binance_testnet()
             else "https://fapi.binance.com"
         ),
         api_key_fn=lambda: os.getenv("BINANCE_API_KEY", "").strip(),

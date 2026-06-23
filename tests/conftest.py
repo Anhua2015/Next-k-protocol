@@ -8,6 +8,7 @@ Goals:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -49,35 +50,31 @@ def fresh_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def seeded_config(fresh_db):
-    """Apply a sane default trading config + init binance client for tests."""
-    fresh_db.set_config_batch({
-        "enabled": "true",
-        "testnet": "true",
-        "entry_type": "MARKET",
-        "max_positions": "8",
-    })
-    # Init/reset the binance HTTP client (Phase 1 lazy singleton)
+    """Init binance client for tests."""
     import sys
     import binance.account as _bacct
-    # Clear modules that cache db references across test reloads.
     for _mod in ("ingest.pipeline", "ingest.guards", "ingest.dispatcher",
                  "trading.market_entry", "trading.limit_entry",
-                 "repos.connection", "repos.config_repo", "repos.signals_repo"):
+                 "repos.connection", "repos.config_repo", "repos.signals_repo",
+                 "trader"):
         sys.modules.pop(_mod, None)
-    # Also clear db facade so it re-imports from repos
     sys.modules.pop("db", None)
     from binance.client import init_client
-    from db import get_config as _cfg
+
+    def _testnet() -> bool:
+        return os.getenv("BINANCE_TESTNET", "false").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+
     init_client(
         base_url_fn=lambda: (
             "https://testnet.binancefuture.com"
-            if _cfg("testnet", "false").lower() == "true"
+            if _testnet()
             else "https://fapi.binance.com"
         ),
         api_key_fn=lambda: "test-key",
         secret_fn=lambda: "test-secret",
     )
-    # Clear caches that persist across test DB reloads
     _bacct._hedge_mode_cache = None
     import binance.exchange_info as _exch
     _exch._exch_cache.clear()
