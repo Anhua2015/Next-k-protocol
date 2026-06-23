@@ -10,7 +10,7 @@
 环境变量（.env.oi 或系统环境变量）：
     BINANCE_API_KEY             币安 API Key
     BINANCE_API_SECRET          币安 API Secret
-    BINANCE_TESTNET             测试网开关
+    BINANCE_TESTNET             测试网开关（启动时写入 DB，覆盖已有值）
     BINANCE_ENABLED             全局交易开关 true/false（启动时写入 DB，覆盖已有值）
     DATA_DIR                    数据目录（默认当前目录）
 """
