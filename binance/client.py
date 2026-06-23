@@ -104,6 +104,11 @@ class BinanceClient:
         signed: bool = True,
         as_text: bool = False,
     ) -> Any:
+        """发送一次 Binance REST 请求。
+
+        重试规则只覆盖限流、服务端故障和网络错误；普通 4xx 代表调用参数有问题，不应
+        盲目重试。``-1021`` 是特殊情况，会同步服务器时间、重新生成签名后再试一次。
+        """
         params = dict(params or {})
         if signed:
             params["timestamp"] = self._ts()
@@ -125,6 +130,7 @@ class BinanceClient:
                 else:
                     raise ValueError(f"Unsupported method: {method}")
 
+                # 429/418/5xx 使用指数退避，避免立即重放进一步触发限流。
                 if resp.status_code in RETRY_STATUSES:
                     last_exc = httpx.HTTPStatusError(
                         f"{resp.status_code} retryable",
@@ -165,6 +171,7 @@ class BinanceClient:
                             time.sleep(delay)
                             continue
                         raise last_exc
+                    # 时间偏差必须重新计算 timestamp 和 signature，复用原签名一定失败。
                     if isinstance(body, dict) and body.get("code") == -1021 and attempt == 0:
                         self._sync_server_time()
                         inner = {k: v for k, v in params.items() if k != "signature"}

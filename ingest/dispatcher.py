@@ -1,4 +1,8 @@
-"""信号分发：调用 trader.execute_trade 执行开仓。"""
+"""把 Pydantic 信号转换成交易编排器使用的普通字典。
+
+此层是 HTTP 数据模型与交易领域函数之间的防腐层。异常在这里被收敛为稳定的
+``action=error``，同时写入 signals_log，避免 FastAPI 返回 500 却没有审计记录。
+"""
 from __future__ import annotations
 
 import logging
@@ -8,7 +12,7 @@ logger = logging.getLogger("ingest.dispatcher")
 
 
 def dispatch(sig: Any, signal_log_id: int) -> Dict[str, Any]:
-    """执行交易并返回 detail 字典。"""
+    """执行交易并返回 ingest API 的单条 detail。"""
     from trader import execute_trade
 
     symbol = sig.symbol

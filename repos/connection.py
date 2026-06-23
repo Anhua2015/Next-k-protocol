@@ -1,4 +1,8 @@
-"""数据库连接 + 初始化。"""
+"""Protocol SQLite 连接、事务边界和幂等迁移。
+
+每次 ``get_db`` 都创建短连接并启用 WAL。写事务还会获取进程内 RLock，配合 ingest
+路由的批量锁减少 SQLite 写竞争。数据库只保存执行审计，不保存 Binance 密钥。
+"""
 from __future__ import annotations
 
 import logging
@@ -57,6 +61,7 @@ CREATE TABLE IF NOT EXISTS signals_log (
 
 @contextmanager
 def get_db(write: bool = False) -> Generator[sqlite3.Connection, None, None]:
+    """提供自动 commit/rollback/close 的连接上下文。"""
     if write:
         _db_write_lock.acquire()
     conn = sqlite3.connect(str(DB_PATH), timeout=10.0)

@@ -1,4 +1,4 @@
-"""Next K Protocol — 币安实盘交易 API 服务。
+"""Next K Protocol — 币安实盘交易执行服务。
 
 独立于 next-k-api，通过 HTTP 接口接收 ORB 信号并执行币安合约交易。
 支持 Railway 一键部署，Swagger /docs 交互文档。
@@ -13,7 +13,11 @@
     BINANCE_TESTNET             是否连接测试网（true/false，仅选网络，不控制是否下单）
     DATA_DIR                    数据目录（默认当前目录）
 
-交易开关、入场类型、持仓上限等由 next-k-api 在信号侧控制；Protocol 收到 ingest 即执行。
+架构边界：
+
+- next-k-api 决定是否交易、方向、保证金、杠杆、SL 和 TP；
+- Protocol 负责幂等去重、交易所精度适配、安全下单和执行审计；
+- Protocol 不重新判断策略质量，避免纸面层与实盘层出现两套决策。
 """
 
 from __future__ import annotations
@@ -48,6 +52,7 @@ CORS_ORIGINS = _parse_cors_origins()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """初始化数据库与 Binance HTTP 单例，并在进程退出时释放连接池。"""
     logger.info("Starting Next K Protocol...")
 
     import db
@@ -59,7 +64,7 @@ async def lifespan(app: FastAPI):
             "1", "true", "yes", "on",
         )
 
-    # Initialize Binance HTTP client (Phase 1)
+    # 客户端通过闭包动态读取环境变量，密钥不会写入数据库或全局配置表。
     from binance.client import init_client
     init_client(
         base_url_fn=lambda: (

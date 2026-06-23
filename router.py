@@ -196,6 +196,8 @@ async def ingest_signals(
     """
     from ingest.pipeline import process_signal_batch
 
+    # 批量请求外层再加一把可重入锁，防止两个请求的“去重插入 → 执行 → 状态更新”
+    # 交错。Repository 内部仍有自己的短写锁，负责非 ingest 调用的 SQLite 安全。
     with _db._db_write_lock:
         result_data = process_signal_batch(body.signals, _db)
 

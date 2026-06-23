@@ -1,4 +1,8 @@
-"""MARKET 市价单入场。"""
+"""MARKET 市价入场及初始保护单事务。
+
+这里把“入场 + SL/TP”视作一个安全事务：入场成功但保护单失败时，立即撤销残余订单并
+调用紧急 MARKET 平仓。返回失败意味着调用方不应把本次信号视为已完成交易。
+"""
 from __future__ import annotations
 
 import logging
@@ -34,7 +38,7 @@ def open_market(
     source: str,
     play: str,
 ) -> MarketEntryResult:
-    """执行 MARKET 市价单入场，返回 MarketEntryResult。"""
+    """执行市价开仓、确认成交价、创建保护单并写入审计结果。"""
     from binance.time_sync import now_utc as _now_utc
     from binance.exchange_info import round_price as _round_price, round_quantity as _round_quantity
     from db import update_signal_execution, update_signal_status
@@ -51,7 +55,7 @@ def open_market(
     order_side = "BUY" if side == "LONG" else "SELL"
     position_side = side if hedge else None
 
-    # Compute SL/TP
+    # SL/TP 已由策略层计算；这里只做数字解析和交易所 tickSize 取整。
     sl_price = None
     tp_price = None
     try:
@@ -65,6 +69,7 @@ def open_market(
     entry_order_id = ""
 
     try:
+        # Protocol 接口使用保证金和杠杆，换算成标的数量后必须按 LOT_SIZE 取整。
         raw_qty = margin * leverage / mark_px
         qty = _round_quantity(raw_qty, step_size)
         if qty <= 0:
@@ -97,7 +102,7 @@ def open_market(
         update_signal_status(signal_log_id, "error", f"entry: {exc}")
         return MarketEntryResult(ok=False, error=str(exc))
 
-    # SL/TP
+    # 入场已完成。从此处开始任何异常都可能产生裸仓，必须走 emergency_close。
     close_side = "SELL" if side == "LONG" else "BUY"
     final_sl_p = _round_price(sl_price, tick_size) if sl_price else None
     final_tp_p = _round_price(tp_price, tick_size) if tp_price else None

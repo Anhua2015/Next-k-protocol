@@ -34,7 +34,11 @@ def _signal_payload(sig: Any) -> Dict[str, Any]:
 
 
 def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
-    """去重：insert_signal 返回 None = 已存在。"""
+    """先写审计日志，同时利用唯一键实现跨请求幂等。
+
+    ``UNIQUE(source, api_signal_id)`` 比进程内 set 更可靠：服务重启、多个请求线程或
+    API 因网络超时重发同一个信号时，都不会产生第二笔真实订单。
+    """
     from binance.time_sync import now_utc
     payload = _signal_payload(sig)
     action = (getattr(sig, "action", None) or "").strip().lower()

@@ -1,4 +1,9 @@
-"""Binance Futures 执行层：接收 ingest 信号并调用 trading/ 下单。"""
+"""Binance Futures 交易总编排和持仓关闭逻辑。
+
+本文件是兼容 facade：对上提供稳定的 ``execute_trade`` 与查询函数，对下把工作委托给
+``binance/`` HTTP 层和 ``trading/`` 下单模块。较复杂的保护单匹配/撤销仍放在这里，
+因为平仓必须先确认不会留下旧 SL/TP 反向开仓或误触发。
+"""
 from __future__ import annotations
 
 import logging
@@ -105,6 +110,11 @@ def notify_binance_auth_fail(context: str, pos_id: Any = None) -> None:
 
 
 def _handle_auth_fail(context: str, pos_id: Any) -> None:
+    """累计 Binance 401/403，并在阈值后暂停新开仓。
+
+    这是进程内熔断器，不是永久交易开关。任意后续成功签名请求会调用
+    ``notify_binance_auth_success`` 清零计数。
+    """
     global _SYNC_AUTH_FAIL_COUNT
     with _SYNC_AUTH_FAIL_LOCK:
         _SYNC_AUTH_FAIL_COUNT += 1
@@ -412,6 +422,11 @@ def _cancel_open_protective_orders(
     actual_side: Optional[str] = None,
     reference_price: Optional[float] = None,
 ) -> None:
+    """精确匹配并撤销指定持仓的 SL 或 TP，随后轮询确认订单真的消失。
+
+    币安条件单列表有时只返回 ``algoType=CONDITIONAL`` 而没有具体类型，代码会额外查询
+    订单详情；仍无法判断时才用触发价相对持仓参考价的位置推断 SL/TP。
+    """
     matched = _open_protective_algo_orders(
         symbol,
         kind=kind,
@@ -503,7 +518,11 @@ def _is_session_close_signal(signal: Dict[str, Any]) -> bool:
 
 
 def _record_close_already_flat(signal: Dict[str, Any]) -> bool:
-    """Exchange already flat (e.g. protective SL/TP filled before strategy close)."""
+    """交易所已经平仓时，把策略 close 记为幂等成功。
+
+    常见时序是保护单先成交，而 API 的纸面结算稍后才发 close。此时再次报错或下反向单
+    都不正确，因此只清理残余订单并记录 ``already_flat``。
+    """
     signal_log_id = signal["signal_log_id"]
     symbol = signal["symbol"]
     requested_side = str(signal["side"]).upper()
@@ -543,6 +562,7 @@ def _record_close_already_flat(signal: Dict[str, Any]) -> bool:
 
 
 def _close_live_position(signal: Dict[str, Any]) -> bool:
+    """以币安真实仓位为准执行减仓，拒绝方向不一致的 close 请求。"""
     signal_log_id = signal["signal_log_id"]
     symbol = signal["symbol"]
     requested_side = str(signal["side"]).upper()
@@ -636,7 +656,11 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
 # -- execute_trade (orchestrator, delegates to trading/) --------------------
 
 def execute_trade(signal: Dict[str, Any]) -> bool:
-    """开仓调度：设杠杆/保证金→市价开仓；平仓走独立路径。"""
+    """执行一条标准化交易动作。
+
+    开仓顺序固定为：字段校验 → exchangeInfo → 逐仓/杠杆 → 持仓模式 → 标记价 →
+    MARKET 入场。仓位和止损参数完全来自 API 信号，不在执行层做策略性修改。
+    """
     from trading.market_entry import open_market
 
     signal_log_id = signal["signal_log_id"]

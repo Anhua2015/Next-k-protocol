@@ -1,4 +1,8 @@
-"""信号摄入流水线：守卫链 → 分发执行。"""
+"""信号摄入流水线：逐条审计、幂等守卫、执行分发和批量汇总。
+
+每条信号独立产生 detail，因此同一批中一条失败不会阻止其余信号执行。路由层在进入
+本模块前持有全局写锁，保证批量内的去重插入和状态更新不会与另一个 ingest 请求交错。
+"""
 from __future__ import annotations
 
 import logging
@@ -18,7 +22,7 @@ class IngestContext:
 
 
 def process_signal_batch(signals, db_module) -> SignalIngestResult:
-    """处理一批信号，返回 SignalIngestResult。"""
+    """顺序处理一批信号，并把每条 action 汇总为 traded/skipped/errors。"""
     ctx = IngestContext(db=db_module)
 
     from observability.metrics import SIGNALS_RECEIVED
@@ -44,6 +48,11 @@ def process_signal_batch(signals, db_module) -> SignalIngestResult:
 
 
 def _process_one(sig, ctx: IngestContext) -> Dict[str, Any]:
+    """处理单条信号。
+
+    守卫执行时会先插入 ``signals_log``。插入成功得到的主键必须一路传给执行层，
+    后续开仓、保护单或平仓结果都更新同一审计记录。
+    """
     detail = {
         "api_signal_id": sig.api_signal_id,
         "symbol": sig.symbol, "side": sig.side, "source": sig.source,
@@ -52,7 +61,7 @@ def _process_one(sig, ctx: IngestContext) -> Dict[str, Any]:
     logger.info("ingest signal: source=%s id=%s symbol=%s side=%s play=%s",
                 sig.source, sig.api_signal_id, sig.symbol, sig.side, sig.play)
 
-    # 守卫链（仅去重）
+    # 当前守卫链只保留去重。保留 list 结构是为了未来增加纯执行安全守卫时不改编排器。
     dedup_signal_log_id = None
     for guard in GUARDS:
         decision = guard(sig, ctx)

@@ -17,7 +17,11 @@ def build_protective_params(
     symbol: str, close_side: str, stop_price: float, qty: float,
     position_side: Optional[str], kind: str,
 ) -> Dict[str, Any]:
-    """构建 SL/TP 条件单参数。"""
+    """构建只减仓的条件单参数。
+
+    单向模式使用 ``reduceOnly``；双向持仓模式必须指定 ``positionSide``，此时 Binance
+    不接受 reduceOnly，因此两者互斥。
+    """
     order_type = "STOP_MARKET" if kind == "SL" else "TAKE_PROFIT_MARKET"
     params: Dict[str, Any] = {
         "algoType": "CONDITIONAL", "symbol": symbol, "side": close_side,
@@ -70,7 +74,11 @@ def emergency_close(
     client: BinanceClient, symbol: str, side: str,
     qty: float, position_side: Optional[str],
 ) -> Optional[str]:
-    """紧急 MARKET 平仓（SL/TP 下单失败时调用）。"""
+    """保护单失败后的最后安全网。
+
+    如果本函数也失败，日志会明确写 ``POSITION IS NAKED``，这是需要立即人工处理的
+    最高优先级故障。
+    """
     close_side = "SELL" if side == "LONG" else "BUY"
     params: Dict[str, Any] = {
         "symbol": symbol, "side": close_side, "type": "MARKET",
