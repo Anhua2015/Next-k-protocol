@@ -54,7 +54,7 @@ def test_positions_upstream_failure_returns_502(seeded_config, monkeypatch):
     resp = client.get("/api/binance/positions?status=open")
 
     assert resp.status_code == 502
-    assert resp.json()["detail"] == "positions_failed_upstream_401"
+    assert resp.json()["detail"] == "positions_failed"
 
 
 def test_pnl_summary_endpoint_removed(seeded_config):
