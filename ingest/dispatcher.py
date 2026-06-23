@@ -46,6 +46,7 @@ def dispatch(sig: Any, signal_log_id: int) -> Dict[str, Any]:
             "play": sig.play or "",
             "profile_id": sig.profile_id,
             "client_ref": sig.client_ref or "",
+            "api_signal_id": sig.api_signal_id or "",
             "action": action,
         }
         ok = execute_trade(signal_dict)

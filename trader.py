@@ -478,6 +478,51 @@ def _cancel_open_protective_orders(
     )
 
 
+def _is_session_close_signal(signal: Dict[str, Any]) -> bool:
+    ref = str(signal.get("api_signal_id") or signal.get("client_ref") or "")
+    return ":session_close:" in ref
+
+
+def _record_close_already_flat(signal: Dict[str, Any]) -> bool:
+    """Exchange already flat (e.g. protective SL/TP filled before strategy close)."""
+    signal_log_id = signal["signal_log_id"]
+    symbol = signal["symbol"]
+    requested_side = str(signal["side"]).upper()
+    source = signal.get("source", "") or ""
+    logger.info(
+        "close already flat symbol=%s side=%s (likely exchange SL/TP)",
+        symbol,
+        requested_side,
+    )
+    try:
+        cancel_all_orders(symbol)
+    except Exception as exc:
+        logger.warning("cancel orders on already_flat %s: %s", symbol, exc)
+    update_signal_status(signal_log_id, "traded", "already_flat")
+    from repos.signals_repo import update_execution
+
+    update_execution(
+        signal_log_id,
+        status="traded",
+        skip_reason="already_flat",
+        result={
+            "source": source,
+            "action": "close",
+            "symbol": symbol,
+            "side": requested_side,
+            "close_price": signal.get("close_price"),
+            "note": "position already flat on exchange",
+        },
+        payload={
+            "symbol": symbol,
+            "side": requested_side,
+            "close_price": signal.get("close_price"),
+            "client_ref": signal.get("client_ref") or "",
+        },
+    )
+    return True
+
+
 def _close_live_position(signal: Dict[str, Any]) -> bool:
     signal_log_id = signal["signal_log_id"]
     symbol = signal["symbol"]
@@ -488,13 +533,11 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
 
     live_pos = get_live_position(symbol)
     if not live_pos:
-        update_signal_status(signal_log_id, "error", "live_position_missing")
-        return False
+        return _record_close_already_flat(signal)
 
     amt = float(live_pos.get("positionAmt") or 0)
     if amt == 0:
-        update_signal_status(signal_log_id, "error", "live_position_missing")
-        return False
+        return _record_close_already_flat(signal)
 
     actual_side = "LONG" if amt > 0 else "SHORT"
     if requested_side != actual_side:
@@ -511,16 +554,20 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
 
     try:
         cancel_all_orders(symbol)
-        _, tick_size, _ = _get_filters(symbol)
         close_side = "SELL" if actual_side == "LONG" else "BUY"
         close_raw = signal.get("close_price")
-        use_limit = close_raw is not None and float(close_raw) > 0
+        use_limit = (
+            not _is_session_close_signal(signal)
+            and close_raw is not None
+            and float(close_raw) > 0
+        )
         params: Dict[str, Any] = {
             "symbol": symbol,
             "side": close_side,
             "quantity": qty,
         }
         if use_limit:
+            _, tick_size, _ = _get_filters(symbol)
             limit_price = _round_price(float(close_raw), tick_size)
             params.update(
                 {
