@@ -85,6 +85,7 @@ class BinanceClient:
         path: str,
         params: Optional[Dict[str, Any]] = None,
         signed: bool = True,
+        as_text: bool = False,
     ) -> Any:
         params = dict(params or {})
         if signed:
@@ -156,6 +157,8 @@ class BinanceClient:
                         continue
                     resp.raise_for_status()
 
+                if as_text:
+                    return resp.text.strip()
                 return resp.json()
             except httpx.RequestError as exc:
                 last_exc = exc

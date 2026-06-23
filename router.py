@@ -28,6 +28,7 @@ from models import (
     SignalIngestResult,
     SignalLogOut,
     StatusOut,
+    TradFiSignOut,
 )
 
 logger = logging.getLogger("router")
@@ -323,3 +324,38 @@ async def list_positions(
             detail = f"positions_failed_upstream_{status_code}"
         raise HTTPException(status_code=502, detail=detail) from exc
     return rows[offset : offset + limit]
+
+
+# ---------------------------------------------------------------------------
+# Internal ops（隐藏，不在 Swagger 展示）
+# ---------------------------------------------------------------------------
+
+
+@router.api_route(
+    "/_internal/sign-tradfi-perps",
+    methods=["GET", "POST"],
+    response_model=TradFiSignOut,
+    include_in_schema=False,
+)
+async def sign_tradfi_perps():
+    """一键签署 Binance TradFi-Perps 协议（CRCL/PAYP 等股票永续必需）。"""
+    from trader import sign_tradfi_perps_agreement
+
+    if not os.getenv("BINANCE_API_KEY", "").strip():
+        raise HTTPException(status_code=400, detail="binance_api_key_missing")
+
+    try:
+        result = sign_tradfi_perps_agreement()
+    except Exception as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        logger.error(
+            "sign tradfi perps failed: type=%s upstream_status=%s",
+            type(exc).__name__,
+            status_code,
+        )
+        detail = "sign_tradfi_perps_failed"
+        if status_code:
+            detail = f"sign_tradfi_perps_failed_upstream_{status_code}"
+        raise HTTPException(status_code=502, detail=detail) from exc
+
+    return TradFiSignOut(ok=True, result=str(result or "SUCCESS"))

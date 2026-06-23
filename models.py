@@ -167,6 +167,13 @@ class AccountSummaryOut(BaseModel):
     unrealized_pnl_usdt: float = Field(..., description="当前未实现盈亏")
 
 
+class TradFiSignOut(BaseModel):
+    """TradFi-Perps 协议签署结果。"""
+
+    ok: bool = Field(..., description="是否成功")
+    result: str = Field(..., description="币安返回内容，通常为 SUCCESS")
+
+
 class StatusOut(BaseModel):
     """服务状态概览。"""
 
