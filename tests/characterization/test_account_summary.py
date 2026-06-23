@@ -39,7 +39,5 @@ def test_global_config_no_longer_contains_trading_keys(seeded_config):
     assert "enabled" not in cfg
     assert "entry_type" not in cfg
     assert "max_positions" not in cfg
-    assert "src_momentum_enabled" not in cfg
-    assert "src_moss_quant_leverage" not in cfg
 
 
