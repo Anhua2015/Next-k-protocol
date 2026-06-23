@@ -3,9 +3,26 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from repos.connection import get_db
+
+
+def _cutoff_received_at(*, keep_hours: float) -> str:
+    dt = datetime.now(timezone.utc) - timedelta(hours=float(keep_hours))
+    return dt.isoformat()
+
+
+def delete_signals_older_than(*, keep_hours: float = 24.0) -> int:
+    """Delete signal log rows older than keep_hours (by received_at)."""
+    cutoff = _cutoff_received_at(keep_hours=keep_hours)
+    with get_db(write=True) as conn:
+        cur = conn.execute(
+            "DELETE FROM signals_log WHERE received_at IS NOT NULL AND received_at < ?",
+            (cutoff,),
+        )
+        return int(cur.rowcount or 0)
 
 
 def insert_signal(

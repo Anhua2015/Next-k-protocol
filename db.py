@@ -18,7 +18,6 @@ from repos.connection import (
 
 # -- Config -----------------------------------------------------------
 from repos.config_repo import (
-    apply_env_config_overrides,
     get_all_config,
     get_config,
     set_config,
@@ -27,6 +26,7 @@ from repos.config_repo import (
 
 # -- Signals ----------------------------------------------------------
 from repos.signals_repo import (
+    delete_signals_older_than,
     insert_signal,
     list_signals,
     update_execution as update_signal_execution,
