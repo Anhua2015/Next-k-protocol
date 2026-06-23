@@ -8,11 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from db import (
-    get_config,
-    set_config,
-    update_signal_status,
-)
+from db import update_signal_status
 
 # -- binance/ facade (constants + lazy client ref) ---------------------------
 from binance.client import (
@@ -77,12 +73,35 @@ def _resolve_client():
 _SYNC_AUTH_FAIL_COUNT = 0
 _SYNC_AUTH_FAIL_THRESHOLD = 20
 _SYNC_AUTH_FAIL_LOCK = threading.Lock()
+_execution_paused = False
+
+
+def is_execution_paused() -> bool:
+    with _SYNC_AUTH_FAIL_LOCK:
+        return _execution_paused
+
+
+def _pause_execution() -> None:
+    global _execution_paused
+    with _SYNC_AUTH_FAIL_LOCK:
+        _execution_paused = True
 
 
 def _reset_auth_fail_count() -> None:
-    global _SYNC_AUTH_FAIL_COUNT
+    global _SYNC_AUTH_FAIL_COUNT, _execution_paused
     with _SYNC_AUTH_FAIL_LOCK:
         _SYNC_AUTH_FAIL_COUNT = 0
+        _execution_paused = False
+
+
+def notify_binance_auth_success() -> None:
+    """Successful signed Binance call — reset auth-fail circuit breaker."""
+    _reset_auth_fail_count()
+
+
+def notify_binance_auth_fail(context: str, pos_id: Any = None) -> None:
+    """401/403 from Binance — accumulate failures and pause opens at threshold."""
+    _handle_auth_fail(context, pos_id)
 
 
 def _handle_auth_fail(context: str, pos_id: Any) -> None:
@@ -93,11 +112,11 @@ def _handle_auth_fail(context: str, pos_id: Any) -> None:
     from observability.metrics import AUTH_FAIL
     AUTH_FAIL.inc()
     if count >= _SYNC_AUTH_FAIL_THRESHOLD:
-        set_config("enabled", "false")
+        _pause_execution()
         from observability.metrics import TRADING_DISABLED_AUTO
         TRADING_DISABLED_AUTO.inc()
         logger.critical(
-            "Binance auth failed %d times; DISABLED trading (%s pos=%s)",
+            "Binance auth failed %d times; paused execution (%s pos=%s)",
             count, context, pos_id,
         )
     else:
@@ -577,7 +596,9 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
                 }
             )
         else:
-            params.update({"type": "MARKET", "reduceOnly": "true"})
+            params.update({"type": "MARKET"})
+        if not position_side:
+            params["reduceOnly"] = "true"
         if position_side:
             params["positionSide"] = position_side
             params.pop("reduceOnly", None)
@@ -615,9 +636,8 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
 # -- execute_trade (orchestrator, delegates to trading/) --------------------
 
 def execute_trade(signal: Dict[str, Any]) -> bool:
-    """开仓调度：读配置→设杠杆/保证金→dispatch MARKET/LIMIT。"""
+    """开仓调度：设杠杆/保证金→市价开仓；平仓走独立路径。"""
     from trading.market_entry import open_market
-    from trading.limit_entry import open_limit
 
     signal_log_id = signal["signal_log_id"]
     symbol = signal["symbol"]
@@ -626,15 +646,15 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     play = signal.get("play", "") or ""
     action = str(signal.get("action", "") or "").lower()
 
-    if get_config("enabled", "false").lower() != "true":
-        update_signal_status(signal_log_id, "error", "trading_disabled")
-        return False
-
     logger.info("execute_trade: source=%s symbol=%s side=%s play=%s id=%s",
                 source, symbol, side, play, signal_log_id)
 
     if action == "close":
         return _close_live_position(signal)
+
+    if is_execution_paused():
+        update_signal_status(signal_log_id, "error", "execution_paused")
+        return False
 
     # Resolve margin/leverage
     try:
@@ -662,10 +682,6 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
                              f"invalid margin={margin} leverage={leverage}")
         return False
 
-    entry_type = get_config("entry_type", "MARKET").upper()
-    if action == "rolling":
-        entry_type = "MARKET"
-
     # Setup: filters + leverage + margin type + hedge mode
     try:
         step_size, tick_size, min_notional = _get_filters(symbol)
@@ -678,16 +694,9 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
         update_signal_status(signal_log_id, "error", f"setup: {exc}")
         return False
 
-    # Dispatch
-    if entry_type == "LIMIT":
-        result = open_limit(
-            signal, symbol, side, margin, leverage,
-            step_size, tick_size, min_notional, hedge, source, play,
-        )
-        return result.ok
-    else:
-        result = open_market(
-            signal, symbol, side, margin, leverage,
-            step_size, tick_size, min_notional, hedge, mark_px, source, play,
-        )
-        return result.ok
+    # Dispatch (always market; entry policy lives in next-k-api)
+    result = open_market(
+        signal, symbol, side, margin, leverage,
+        step_size, tick_size, min_notional, hedge, mark_px, source, play,
+    )
+    return result.ok

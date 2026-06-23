@@ -10,17 +10,6 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
-class ConfigUpdate(BaseModel):
-    """批量更新交易配置的键值对。"""
-
-    pairs: Dict[str, str] = Field(
-        ...,
-        description='配置键值对，如 {"enabled": "true", "entry_type": "MARKET"}。'
-        "币安 API Key/Secret 不允许通过该接口修改。",
-        examples=[{"enabled": "true", "entry_type": "MARKET"}],
-    )
-
-
 class SignalItem(BaseModel):
     """单条 ORB 信号，由 next-k-api 在扫描完成后推送。"""
 
@@ -177,9 +166,8 @@ class TradFiSignOut(BaseModel):
 class StatusOut(BaseModel):
     """服务状态概览。"""
 
-    enabled: str = Field(..., description="交易是否启用：'true' | 'false'")
-    testnet: str = Field(..., description="是否使用测试网：'true' | 'false'")
+    testnet: bool = Field(..., description="是否连接币安测试网（来自 BINANCE_TESTNET 环境变量）")
     open_positions: int = Field(..., description="当前持仓数")
-    max_positions: str = Field(..., description="全局最大持仓数")
     api_key_set: bool = Field(..., description="币安 API Key 是否已配置")
+    execution_paused: bool = Field(..., description="因连续鉴权失败等原因暂停执行")
     db_path: str = Field(..., description="SQLite 数据库文件路径")

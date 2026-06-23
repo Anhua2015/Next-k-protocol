@@ -5,7 +5,6 @@
 接口分组：
 - 健康检查：GET /api/binance/health
 - 状态查询：GET /api/binance/status
-- 配置管理：GET/POST /api/binance/config
 - 信号接入：POST /api/binance/signals/ingest
 - 信号日志：GET /api/binance/signals
 - 持仓管理：GET /api/binance/positions（实时读取币安当前持仓）
@@ -22,7 +21,6 @@ from fastapi import APIRouter, HTTPException, Query
 import db as _db
 from models import (
     AccountSummaryOut,
-    ConfigUpdate,
     LivePositionOut,
     SignalIngestRequest,
     SignalIngestResult,
@@ -37,9 +35,6 @@ router = APIRouter(
     prefix="/api/binance",
     tags=["币安实盘交易"],
 )
-
-_ENV_ONLY_KEYS = {"binance_api_key", "binance_api_secret"}
-
 
 # ---------------------------------------------------------------------------
 # Health（公开）
@@ -86,89 +81,48 @@ async def health():
     "/status",
     response_model=StatusOut,
     summary="获取服务状态",
-    description="返回交易启用状态、网络模式、当前持仓数、配置概要等信息。",
+    description="返回网络模式、当前持仓数、执行暂停状态等信息。",
 )
 async def get_status():
-    """查询服务运行状态和关键配置摘要。
+    """查询服务运行状态摘要。
 
     返回字段说明：
-    - **enabled**：交易是否启用，'true' 或 'false'。false 时不会执行任何交易。
-    - **testnet**：是否使用币安测试网。true=测试网（testnet.binancefuture.com），false=主网。
+    - **testnet**：是否连接币安测试网（BINANCE_TESTNET 环境变量）。
     - **open_positions**：当前正在运行的持仓数量。
-    - **max_positions**：历史配置项，ingest 不再据此拦截信号。
+    - **execution_paused**：连续鉴权失败等安全原因暂停执行。
     - **api_key_set**：币安 API Key 是否已配置。
     - **db_path**：SQLite 数据库文件路径。
     """
-    cfg = _db.get_all_config()
-    from trader import list_live_positions
+    from trader import is_execution_paused, list_live_positions
 
-    open_positions_list = list_live_positions()
+    testnet = os.getenv("BINANCE_TESTNET", "false").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    paused = is_execution_paused()
+    try:
+        open_positions_list = list_live_positions()
+    except Exception as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        logger.error(
+            "status positions probe failed: type=%s upstream_status=%s",
+            type(exc).__name__,
+            status_code,
+        )
+        detail = "status_positions_failed"
+        if status_code:
+            detail = f"status_positions_failed_upstream_{status_code}"
+        raise HTTPException(status_code=502, detail=detail) from exc
     logger.info(
-        "status: enabled=%s testnet=%s open=%d max=%s",
-        cfg.get("enabled", "false"), cfg.get("testnet", "false"),
-        len(open_positions_list), cfg.get("max_positions", "8"),
+        "status: testnet=%s open=%d paused=%s",
+        testnet, len(open_positions_list), paused,
     )
     return StatusOut(
-        enabled=cfg.get("enabled", "false"),
-        testnet=cfg.get("testnet", "false"),
+        testnet=testnet,
         open_positions=len(open_positions_list),
-        max_positions=cfg.get("max_positions", "8"),
         api_key_set=bool(os.getenv("BINANCE_API_KEY", "").strip()),
+        execution_paused=paused,
         db_path=str(_db.DB_PATH),
     )
-
-
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/config",
-    summary="读取交易配置",
-    description="返回可通过 API 管理的交易配置键值对。币安 API Key/Secret 仅支持环境变量配置，不会出现在返回中。",
-)
-async def get_config():
-    """获取完整的交易配置。
-
-    配置项说明：
-    - **enabled**: 交易开关，'true'/'false'
-    - **testnet**: 测试网开关，'true'/'false'
-    - **max_positions**: 全局最大持仓数
-    """
-    cfg = _db.get_all_config()
-    return {k: v for k, v in cfg.items() if k not in _ENV_ONLY_KEYS}
-
-
-@router.post(
-    "/config",
-    summary="更新交易配置",
-    description="批量更新一个或多个配置项。币安 API Key/Secret 仅支持通过环境变量或部署平台配置，不可通过接口更新。",
-)
-async def update_config(body: ConfigUpdate):
-    """批量更新配置键值对。
-
-    使用示例：
-    ```json
-    {
-      "pairs": {
-        "enabled": "true",
-        "entry_type": "MARKET",
-        "max_positions": "8"
-      }
-    }
-    ```
-
-    注意：
-    - 空字符串的值不会被写入（与缺失相同）
-    - 币安 API Key/Secret 仅支持通过 `.env.oi`、系统环境变量或 Railway 配置
-    """
-    blocked = sorted(k for k in body.pairs if k in _ENV_ONLY_KEYS)
-    if blocked:
-        raise HTTPException(status_code=400, detail="binance_credentials_env_only")
-    logger.info("config update keys=%s", list(body.pairs.keys()))
-    _db.set_config_batch(body.pairs)
-    return {"ok": True, "updated": list(body.pairs.keys())}
 
 
 @router.get(
@@ -274,6 +228,7 @@ async def list_signals(
       - 'error'：处理失败（skip_reason 中有详细错误信息）
     - **skip_reason**: 跳过或失败的具体原因
     """
+    _db.delete_signals_older_than(keep_hours=24.0)
     rows = _db.list_signals(
         limit=limit,
         offset=offset,
