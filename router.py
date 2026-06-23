@@ -16,9 +16,10 @@ import logging
 import os
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 import db as _db
+from auth import require_auth
 from models import (
     AccountSummaryOut,
     LivePositionOut,
@@ -161,7 +162,10 @@ async def account_summary():
     summary="接收并处理交易信号",
     description="由 next-k-api 调用，批量推送交易信号。Protocol 仅记录并转发币安，不做策略侧限制（仅 api_signal_id 去重）。",
 )
-async def ingest_signals(body: SignalIngestRequest):
+async def ingest_signals(
+    body: SignalIngestRequest,
+    _: None = Depends(require_auth),
+):
     """接收交易信号并转发币安执行。
 
     处理流程（每条信号）：
@@ -292,7 +296,7 @@ async def list_positions(
     response_model=TradFiSignOut,
     include_in_schema=False,
 )
-async def sign_tradfi_perps():
+async def sign_tradfi_perps(_: None = Depends(require_auth)):
     """一键签署 Binance TradFi-Perps 协议（CRCL/PAYP 等股票永续必需）。"""
     from trader import sign_tradfi_perps_agreement
 

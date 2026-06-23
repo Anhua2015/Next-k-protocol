@@ -34,21 +34,12 @@ load_env_oi()
 
 PORT = int(os.environ.get("PORT", 8001))
 # CORS 白名单：通过 PROTOCOL_CORS_ORIGINS 环境变量配置（逗号分隔）。
-# 默认仅允许本地（开发）；生产环境必须配置实际前端域名，例如：
+# 默认保持兼容开放；生产环境应配置实际前端域名，例如：
 #   PROTOCOL_CORS_ORIGINS=https://app.example.com,https://staging.example.com
 def _parse_cors_origins() -> list[str]:
     raw = os.getenv("PROTOCOL_CORS_ORIGINS", "").strip()
     if not raw:
-        return [
-            "http://localhost",
-            "http://localhost:8000",
-            "http://localhost:8001",
-            "http://127.0.0.1",
-            "http://127.0.0.1:8000",
-            "http://127.0.0.1:8001",
-            "http://localhost:5173",
-            "http://localhost:5500",
-        ]
+        return ["*"]
     return [o.strip() for o in raw.split(",") if o.strip()]
 
 
@@ -100,12 +91,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    # 临时放开到 * 以便线上前端能跨域访问；建议尽快配 PROTOCOL_CORS_ORIGINS
-    # 环境变量后改回白名单（参考 _parse_cors_origins 注释）。
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Maintenance-Token"],
 )
 
 from router import router
