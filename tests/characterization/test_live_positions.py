@@ -5,7 +5,8 @@ import sys
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+
+from tests.characterization.client import protocol_test_client
 
 pytestmark = pytest.mark.characterization
 
@@ -16,7 +17,7 @@ def _client():
     import main
 
     importlib.reload(main)
-    return TestClient(main.app)
+    return protocol_test_client(main.app)
 
 
 def test_positions_open_reads_binance_position_risk(seeded_config, mock_binance):

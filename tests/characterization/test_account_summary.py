@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
+
+from tests.characterization.client import protocol_test_client
 
 pytestmark = pytest.mark.characterization
 
@@ -9,7 +10,7 @@ def test_open_signal_without_margin_is_rejected_at_execution(seeded_config, mock
     import main
 
     mock_binance.all(position_risk="position_risk_closed")
-    client = TestClient(main.app)
+    client = protocol_test_client(main.app)
     resp = client.post(
         "/api/binance/signals/ingest",
         json={
@@ -39,5 +40,4 @@ def test_global_config_no_longer_contains_trading_keys(seeded_config):
     assert "enabled" not in cfg
     assert "entry_type" not in cfg
     assert "max_positions" not in cfg
-
 

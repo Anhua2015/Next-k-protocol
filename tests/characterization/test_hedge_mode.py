@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
+
+from tests.characterization.client import protocol_test_client
 
 pytestmark = pytest.mark.characterization
 
@@ -14,7 +15,7 @@ def _client(seeded_config):
         sys.modules.pop(mod, None)
     import main
     importlib.reload(main)
-    return TestClient(main.app)
+    return protocol_test_client(main.app)
 
 
 def _payload():
