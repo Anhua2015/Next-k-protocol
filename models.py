@@ -227,6 +227,13 @@ class TradFiSignOut(BaseModel):
     result: str = Field(..., description="币安返回内容，通常为 SUCCESS")
 
 
+class TradingSwitchOut(BaseModel):
+    """人工实盘交易开关结果。"""
+
+    ok: bool = Field(..., description="是否成功")
+    trading_enabled: bool = Field(..., description="实盘新开仓是否允许")
+
+
 class StatusOut(BaseModel):
     """服务状态概览。"""
 
@@ -234,6 +241,7 @@ class StatusOut(BaseModel):
     open_positions: int = Field(..., description="当前持仓数")
     api_key_set: bool = Field(..., description="币安 API Key 是否已配置")
     maintenance_auth_enabled: bool = Field(..., description="维护令牌鉴权是否启用")
+    trading_enabled: bool = Field(..., description="人工实盘交易开关是否开启；关闭后禁止新开仓")
     execution_paused: bool = Field(..., description="因连续鉴权失败等原因暂停执行")
     entry_order_type: str = Field(..., description="开仓订单类型：LIMIT_FOK / MARKET")
     max_entry_slippage_bps: float = Field(..., description="最大允许开仓滑点 bps")

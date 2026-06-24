@@ -33,6 +33,7 @@ from models import (
     SignalLogOut,
     StatusOut,
     TradFiSignOut,
+    TradingSwitchOut,
 )
 
 logger = logging.getLogger("router")
@@ -106,6 +107,7 @@ async def get_status():
         _env_bool,
         _env_float,
         is_execution_paused,
+        is_trading_enabled,
         list_live_positions,
     )
 
@@ -113,6 +115,7 @@ async def get_status():
         "1", "true", "yes", "on",
     )
     paused = is_execution_paused()
+    trading_enabled = is_trading_enabled()
     try:
         open_positions_list = list_live_positions()
     except Exception as exc:
@@ -135,6 +138,7 @@ async def get_status():
         open_positions=len(open_positions_list),
         api_key_set=bool(os.getenv("BINANCE_API_KEY", "").strip()),
         maintenance_auth_enabled=protocol_token_configured(),
+        trading_enabled=trading_enabled,
         execution_paused=paused,
         entry_order_type=_entry_order_type("open"),
         max_entry_slippage_bps=_env_float("PROTOCOL_MAX_ENTRY_SLIPPAGE_BPS", 20.0),
@@ -144,6 +148,23 @@ async def get_status():
         pnl_last_sync_at=_db.get_income_sync_state().get("last_sync_at"),
         db_path=str(_db.DB_PATH),
     )
+
+
+@router.post(
+    "/trading/enabled",
+    response_model=TradingSwitchOut,
+    summary="打开或关闭实盘新开仓",
+    description="需要维护令牌。关闭后禁止新开仓，但仍允许平仓/减风险操作。",
+)
+async def set_trading_enabled_endpoint(
+    enabled: bool = Query(..., description="true=允许实盘新开仓；false=禁止实盘新开仓"),
+    _auth=Depends(require_auth),
+):
+    from trader import set_trading_enabled
+
+    value = set_trading_enabled(enabled)
+    logger.warning("runtime trading switch changed: trading_enabled=%s", value)
+    return TradingSwitchOut(ok=True, trading_enabled=value)
 
 
 @router.get(

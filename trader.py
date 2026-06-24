@@ -83,10 +83,47 @@ _SYNC_AUTH_FAIL_THRESHOLD = 20
 _SYNC_AUTH_FAIL_LOCK = threading.Lock()
 _execution_paused = False
 
+TRADING_ENABLED_CONFIG_KEY = "runtime_trading_enabled"
+
 
 def is_execution_paused() -> bool:
     with _SYNC_AUTH_FAIL_LOCK:
         return _execution_paused
+
+
+def _parse_bool_config(raw: Any, default: bool = True) -> bool:
+    """解析 DB 中保存的布尔配置值。异常/空值按默认值处理。"""
+    if raw is None:
+        return default
+    text = str(raw).strip().lower()
+    if not text:
+        return default
+    if text in ("1", "true", "yes", "on", "enabled", "enable"):
+        return True
+    if text in ("0", "false", "no", "off", "disabled", "disable"):
+        return False
+    logger.warning("bad %s=%r; fallback to %s", TRADING_ENABLED_CONFIG_KEY, raw, default)
+    return default
+
+
+def is_trading_enabled() -> bool:
+    """返回人工交易开关状态。
+
+    默认开启，避免升级后因缺少历史配置而意外停掉现有实盘；关闭后只禁止新开仓，
+    平仓仍会继续放行。
+    """
+    import db
+
+    raw = db.get_config(TRADING_ENABLED_CONFIG_KEY, "true")
+    return _parse_bool_config(raw, default=True)
+
+
+def set_trading_enabled(enabled: bool) -> bool:
+    """持久化人工交易开关状态。"""
+    import db
+
+    db.set_config(TRADING_ENABLED_CONFIG_KEY, "true" if enabled else "false")
+    return enabled
 
 
 def _pause_execution() -> None:
@@ -716,6 +753,10 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
 
     if action == "close":
         return _close_live_position(signal)
+
+    if not is_trading_enabled():
+        update_signal_status(signal_log_id, "error", "trading_disabled")
+        return False
 
     if is_execution_paused():
         update_signal_status(signal_log_id, "error", "execution_paused")

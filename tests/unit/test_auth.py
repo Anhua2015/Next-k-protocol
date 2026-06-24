@@ -55,3 +55,20 @@ def test_ingest_endpoint_requires_token_when_configured(monkeypatch):
 
     assert missing.status_code == 401
     assert accepted.status_code == 200
+
+
+def test_trading_switch_requires_token_and_persists(monkeypatch, fresh_db):
+    monkeypatch.setenv("PROTOCOL_MAINTENANCE_TOKEN", "test-token")
+    import main
+
+    with TestClient(main.app) as client:
+        missing = client.post("/api/binance/trading/enabled?enabled=false")
+        accepted = client.post(
+            "/api/binance/trading/enabled?enabled=false",
+            headers={"X-Maintenance-Token": "test-token"},
+        )
+
+    assert missing.status_code == 401
+    assert accepted.status_code == 200
+    assert accepted.json() == {"ok": True, "trading_enabled": False}
+    assert fresh_db.get_config("runtime_trading_enabled") == "false"
