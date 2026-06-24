@@ -99,7 +99,15 @@ async def get_status():
     - **api_key_set**：币安 API Key 是否已配置。
     - **db_path**：SQLite 数据库文件路径。
     """
-    from trader import is_execution_paused, list_live_positions
+    from auth import protocol_token_configured
+    from pnl_auto_sync import pnl_auto_sync_enabled
+    from trader import (
+        _entry_order_type,
+        _env_bool,
+        _env_float,
+        is_execution_paused,
+        list_live_positions,
+    )
 
     testnet = os.getenv("BINANCE_TESTNET", "false").strip().lower() in (
         "1", "true", "yes", "on",
@@ -126,7 +134,14 @@ async def get_status():
         testnet=testnet,
         open_positions=len(open_positions_list),
         api_key_set=bool(os.getenv("BINANCE_API_KEY", "").strip()),
+        maintenance_auth_enabled=protocol_token_configured(),
         execution_paused=paused,
+        entry_order_type=_entry_order_type("open"),
+        max_entry_slippage_bps=_env_float("PROTOCOL_MAX_ENTRY_SLIPPAGE_BPS", 20.0),
+        max_entry_spread_bps=_env_float("PROTOCOL_MAX_ENTRY_SPREAD_BPS", 0.0),
+        market_entry_fallback=_env_bool("PROTOCOL_MARKET_ENTRY_FALLBACK", False),
+        pnl_auto_sync_enabled=pnl_auto_sync_enabled(),
+        pnl_last_sync_at=_db.get_income_sync_state().get("last_sync_at"),
         db_path=str(_db.DB_PATH),
     )
 
