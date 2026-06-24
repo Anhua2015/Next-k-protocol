@@ -128,7 +128,10 @@ while [[ $WAIT_COUNT -lt $WAIT_MAX ]]; do
 done
 
 if [[ $WAIT_COUNT -ge $WAIT_MAX ]]; then
-    warn "API 未在 ${WAIT_MAX}s 内响应，可能仍在加载中。请检查：$LOG_FILE"
+    error "API 未在 ${WAIT_MAX}s 内通过健康检查。请检查：$LOG_FILE"
+    kill -TERM "$API_PID" 2>/dev/null || true
+    rm -f "$PID_FILE"
+    exit 1
 fi
 
 echo ""
