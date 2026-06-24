@@ -128,12 +128,17 @@ def aggregate_pnl(
     period: str = "daily",
     days: int = 90,
     tz_name: str = "Asia/Shanghai",
+    start_date: str | None = None,
 ) -> list[dict[str, Any]]:
     period = period if period in {"daily", "weekly", "monthly"} else "daily"
     days = max(1, min(int(days), 365))
     end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    start_ms = end_ms - days * 86_400_000
     tz = ZoneInfo(tz_name)
+    if start_date:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=tz)
+        start_ms = int(start_dt.astimezone(timezone.utc).timestamp() * 1000)
+    else:
+        start_ms = end_ms - days * 86_400_000
     events = list_income_events(start_ms=start_ms, end_ms=end_ms, limit=100_000, offset=0)
 
     buckets: dict[str, dict[str, Any]] = {}
@@ -174,8 +179,13 @@ def aggregate_pnl(
     return rows
 
 
-def pnl_totals(*, days: int = 90, tz_name: str = "Asia/Shanghai") -> dict[str, Any]:
-    rows = aggregate_pnl(period="daily", days=days, tz_name=tz_name)
+def pnl_totals(
+    *,
+    days: int = 90,
+    tz_name: str = "Asia/Shanghai",
+    start_date: str | None = None,
+) -> dict[str, Any]:
+    rows = aggregate_pnl(period="daily", days=days, tz_name=tz_name, start_date=start_date)
     sums: defaultdict[str, float] = defaultdict(float)
     events = 0
     for row in rows:
@@ -184,6 +194,7 @@ def pnl_totals(*, days: int = 90, tz_name: str = "Asia/Shanghai") -> dict[str, A
             sums[key] += float(row.get(key) or 0)
     return {
         "days": days,
+        "start_date": start_date or "",
         "net_pnl_usdt": round(sums["net_pnl_usdt"], 8),
         "realized_pnl_usdt": round(sums["realized_pnl_usdt"], 8),
         "commission_usdt": round(sums["commission_usdt"], 8),

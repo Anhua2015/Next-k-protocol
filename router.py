@@ -347,11 +347,12 @@ async def clear_pnl_cache(_: None = Depends(require_auth)):
 async def pnl_summary(
     period: str = Query("daily", pattern="^(daily|weekly|monthly)$", description="聚合粒度"),
     days: int = Query(90, ge=1, le=365, description="统计最近 N 天本地缓存"),
+    start_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$", description="只统计该日期及之后，格式 YYYY-MM-DD"),
     timezone: str = Query("Asia/Shanghai", description="周期边界时区"),
 ):
     try:
-        rows = _db.aggregate_pnl(period=period, days=days, tz_name=timezone)
-        totals = _db.pnl_totals(days=days, tz_name=timezone)
+        rows = _db.aggregate_pnl(period=period, days=days, tz_name=timezone, start_date=start_date)
+        totals = _db.pnl_totals(days=days, tz_name=timezone, start_date=start_date)
         sync_state = _db.get_income_sync_state()
     except Exception as exc:
         logger.error("pnl summary failed: %s", exc)
@@ -359,6 +360,7 @@ async def pnl_summary(
     return PnlSummaryOut(
         period=period,
         days=days,
+        start_date=start_date,
         timezone=timezone,
         totals=totals,
         sync_state=sync_state,

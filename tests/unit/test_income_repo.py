@@ -54,6 +54,15 @@ def test_income_events_aggregate_net_pnl(fresh_db):
     assert summary[0]["funding_fee_usdt"] == -0.25
     assert summary[0]["event_count"] == 3
 
+    tomorrow = datetime.fromtimestamp(now_ms / 1000, timezone.utc).date()
+    summary_from_today = db.aggregate_pnl(
+        period="daily",
+        days=365,
+        tz_name="UTC",
+        start_date=tomorrow.isoformat(),
+    )
+    assert len(summary_from_today) == 1
+
     cleared = db.clear_income_cache()
     assert cleared["deleted_events"] == 3
     assert cleared["deleted_sync_state"] == 1

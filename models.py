@@ -190,6 +190,7 @@ class PnlSummaryOut(BaseModel):
 
     period: str = Field(..., description="聚合粒度：daily / weekly / monthly")
     days: int = Field(..., description="统计最近 N 天")
+    start_date: Optional[str] = Field(None, description="只统计该日期及之后，格式 YYYY-MM-DD")
     timezone: str = Field(..., description="周期边界使用的时区")
     totals: Dict[str, Any] = Field(..., description="总计")
     sync_state: Dict[str, str] = Field(default_factory=dict, description="同步状态")

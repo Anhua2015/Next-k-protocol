@@ -61,10 +61,11 @@ def test_positions_upstream_failure_returns_502(seeded_config, monkeypatch):
 def test_pnl_summary_endpoint_returns_empty_cache(seeded_config):
     client = _client()
 
-    resp = client.get("/api/binance/pnl/summary")
+    resp = client.get("/api/binance/pnl/summary?start_date=2026-06-01")
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["period"] == "daily"
+    assert body["start_date"] == "2026-06-01"
     assert body["rows"] == []
     assert body["totals"]["net_pnl_usdt"] == 0
