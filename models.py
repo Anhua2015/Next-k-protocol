@@ -156,6 +156,62 @@ class AccountSummaryOut(BaseModel):
     unrealized_pnl_usdt: float = Field(..., description="当前未实现盈亏")
 
 
+class PnlSyncOut(BaseModel):
+    """盈亏流水同步结果。"""
+
+    ok: bool = Field(..., description="是否成功")
+    days: int = Field(..., description="同步最近 N 天")
+    fetched: int = Field(..., description="从 Binance 拉取到的流水数量")
+    inserted: int = Field(..., description="新增写入本地缓存的流水数量")
+
+
+class PnlClearOut(BaseModel):
+    """盈亏缓存清理结果。"""
+
+    ok: bool = Field(..., description="是否成功")
+    deleted_events: int = Field(..., description="删除的 income_events 数量")
+    deleted_sync_state: int = Field(..., description="删除的同步状态数量")
+
+
+class PnlSummaryRow(BaseModel):
+    """单个日/周/月周期的净盈亏聚合。"""
+
+    period: str = Field(..., description="周期标签：YYYY-MM-DD / YYYY-Www / YYYY-MM")
+    net_pnl_usdt: float = Field(..., description="净盈亏 = 已实现盈亏 + 手续费 + 资金费率 + 返佣")
+    realized_pnl_usdt: float = Field(..., description="已实现盈亏")
+    commission_usdt: float = Field(..., description="手续费，通常为负数")
+    funding_fee_usdt: float = Field(..., description="资金费率，可正可负")
+    rebate_usdt: float = Field(..., description="返佣/手续费返还")
+    event_count: int = Field(..., description="该周期内 income 流水数量")
+
+
+class PnlSummaryOut(BaseModel):
+    """盈亏摘要返回。"""
+
+    period: str = Field(..., description="聚合粒度：daily / weekly / monthly")
+    days: int = Field(..., description="统计最近 N 天")
+    timezone: str = Field(..., description="周期边界使用的时区")
+    totals: Dict[str, Any] = Field(..., description="总计")
+    sync_state: Dict[str, str] = Field(default_factory=dict, description="同步状态")
+    rows: List[PnlSummaryRow] = Field(default_factory=list, description="周期聚合结果")
+
+
+class IncomeEventOut(BaseModel):
+    """本地缓存的 Binance income 流水。"""
+
+    id: int
+    symbol: Optional[str] = None
+    income_type: str
+    income: float
+    asset: str
+    time_ms: int
+    tran_id: str
+    trade_id: Optional[str] = None
+    info: Optional[str] = None
+    raw_json: Optional[str] = None
+    synced_at: str
+
+
 class TradFiSignOut(BaseModel):
     """TradFi-Perps 协议签署结果。"""
 

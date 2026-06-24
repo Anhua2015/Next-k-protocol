@@ -24,6 +24,8 @@ _PERF_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_signals_log_status ON signals_log(status)",
     "CREATE INDEX IF NOT EXISTS idx_signals_log_source_action ON signals_log(source, action, status)",
     "CREATE INDEX IF NOT EXISTS idx_signals_log_profile ON signals_log(source, profile_id)",
+    "CREATE INDEX IF NOT EXISTS idx_income_events_time ON income_events(time_ms)",
+    "CREATE INDEX IF NOT EXISTS idx_income_events_type_time ON income_events(income_type, time_ms)",
 ]
 
 DDL = """
@@ -55,6 +57,27 @@ CREATE TABLE IF NOT EXISTS signals_log (
     payload_json   TEXT,
     result_json    TEXT,
     UNIQUE(source, api_signal_id)
+);
+
+CREATE TABLE IF NOT EXISTS income_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol       TEXT    DEFAULT '',
+    income_type  TEXT    NOT NULL,
+    income       REAL    NOT NULL,
+    asset        TEXT    NOT NULL DEFAULT 'USDT',
+    time_ms      INTEGER NOT NULL,
+    tran_id      TEXT    NOT NULL,
+    trade_id     TEXT    DEFAULT '',
+    info         TEXT    DEFAULT '',
+    raw_json     TEXT,
+    synced_at    TEXT    NOT NULL,
+    UNIQUE(income_type, tran_id)
+);
+
+CREATE TABLE IF NOT EXISTS income_sync_state (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
 );
 """
 

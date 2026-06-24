@@ -39,6 +39,7 @@ from binance.account import (
     set_leverage as _set_lev_fn,
     set_margin_type as _set_margin_fn,
 )
+from binance.income import sync_recent_income as _sync_recent_income_fn
 from binance.tradfi import sign_tradfi_perps_agreement as _sign_tradfi_fn
 from binance.time_sync import (
     RECV_WINDOW_MS, SERVER_TIME_RESYNC_SEC,
@@ -145,6 +146,7 @@ def get_symbol_info(s):         return _sym_info_fn(_resolve_client(), s)
 def _detect_hedge_mode():       return _hedge_fn(_resolve_client())
 def get_account_summary():      return _account_summary_fn(_resolve_client())
 def list_live_positions():      return _list_live_positions_fn(_resolve_client())
+def sync_recent_income(days=90): return _sync_recent_income_fn(_resolve_client(), days=days)
 def sign_tradfi_perps_agreement(): return _sign_tradfi_fn(_resolve_client())
 def get_live_position(s):       return _live_pos_fn(_resolve_client(), s)
 def get_order(s, oid):          return _get_order_fn(_resolve_client(), s, oid)

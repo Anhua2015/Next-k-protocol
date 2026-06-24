@@ -22,7 +22,11 @@ import db as _db
 from auth import require_auth
 from models import (
     AccountSummaryOut,
+    IncomeEventOut,
+    PnlClearOut,
     LivePositionOut,
+    PnlSummaryOut,
+    PnlSyncOut,
     SignalIngestRequest,
     SignalIngestResult,
     SignalLogOut,
@@ -285,6 +289,93 @@ async def list_positions(
             detail = f"positions_failed_upstream_{status_code}"
         raise HTTPException(status_code=502, detail=detail) from exc
     return rows[offset : offset + limit]
+
+
+# ---------------------------------------------------------------------------
+# PnL
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/pnl/sync",
+    response_model=PnlSyncOut,
+    summary="同步 Binance income 流水",
+    description="从 Binance /fapi/v1/income 拉取近期 REALIZED_PNL/COMMISSION/FUNDING_FEE 等流水并缓存到本地。",
+)
+async def sync_pnl(
+    days: int = Query(90, ge=1, le=90, description="同步最近 N 天，普通 income 接口只适合近期数据"),
+    _: None = Depends(require_auth),
+):
+    from trader import sync_recent_income
+
+    try:
+        result = sync_recent_income(days=days)
+    except Exception as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        logger.error(
+            "pnl sync failed: type=%s upstream_status=%s",
+            type(exc).__name__,
+            status_code,
+        )
+        detail = "pnl_sync_failed"
+        if status_code:
+            detail = f"pnl_sync_failed_upstream_{status_code}"
+        raise HTTPException(status_code=502, detail=detail) from exc
+    return PnlSyncOut(ok=True, **result)
+
+
+@router.post(
+    "/pnl/clear-cache",
+    response_model=PnlClearOut,
+    summary="清理本地 PnL 缓存",
+    description="仅删除本地 income_events 和同步状态，不影响 Binance 账户真实流水。",
+)
+async def clear_pnl_cache(_: None = Depends(require_auth)):
+    try:
+        result = _db.clear_income_cache()
+    except Exception as exc:
+        logger.error("pnl cache clear failed: %s", exc)
+        raise HTTPException(status_code=500, detail="pnl_cache_clear_failed") from exc
+    return PnlClearOut(ok=True, **result)
+
+
+@router.get(
+    "/pnl/summary",
+    response_model=PnlSummaryOut,
+    summary="查询净盈亏日/周/月聚合",
+)
+async def pnl_summary(
+    period: str = Query("daily", pattern="^(daily|weekly|monthly)$", description="聚合粒度"),
+    days: int = Query(90, ge=1, le=365, description="统计最近 N 天本地缓存"),
+    timezone: str = Query("Asia/Shanghai", description="周期边界时区"),
+):
+    try:
+        rows = _db.aggregate_pnl(period=period, days=days, tz_name=timezone)
+        totals = _db.pnl_totals(days=days, tz_name=timezone)
+        sync_state = _db.get_income_sync_state()
+    except Exception as exc:
+        logger.error("pnl summary failed: %s", exc)
+        raise HTTPException(status_code=500, detail="pnl_summary_failed") from exc
+    return PnlSummaryOut(
+        period=period,
+        days=days,
+        timezone=timezone,
+        totals=totals,
+        sync_state=sync_state,
+        rows=rows,
+    )
+
+
+@router.get(
+    "/pnl/events",
+    response_model=List[IncomeEventOut],
+    summary="查询本地缓存的 income 流水",
+)
+async def pnl_events(
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    return _db.list_income_events(limit=limit, offset=offset)
 
 
 # ---------------------------------------------------------------------------

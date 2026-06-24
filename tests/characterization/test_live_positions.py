@@ -58,9 +58,13 @@ def test_positions_upstream_failure_returns_502(seeded_config, monkeypatch):
     assert resp.json()["detail"] == "positions_failed"
 
 
-def test_pnl_summary_endpoint_removed(seeded_config):
+def test_pnl_summary_endpoint_returns_empty_cache(seeded_config):
     client = _client()
 
     resp = client.get("/api/binance/pnl/summary")
 
-    assert resp.status_code in (404, 410)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["period"] == "daily"
+    assert body["rows"] == []
+    assert body["totals"]["net_pnl_usdt"] == 0

@@ -32,3 +32,13 @@ from repos.signals_repo import (
     update_execution as update_signal_execution,
     update_status as update_signal_status,
 )
+
+# -- Income / PnL -----------------------------------------------------
+from repos.income_repo import (
+    aggregate_pnl,
+    clear_income_cache,
+    get_income_sync_state,
+    list_income_events,
+    pnl_totals,
+    upsert_income_events,
+)

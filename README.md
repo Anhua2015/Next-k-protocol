@@ -57,11 +57,13 @@ next-k-api (扫描/信号) → HTTP POST /api/binance/signals/ingest → Protoco
 | `binance/signing.py` | HMAC-SHA256 签名 |
 | `binance/time_sync.py` | 服务器时间偏移维护 |
 | `binance/account.py` | 账户操作：hedge 模式检测、杠杆/保证金设置、持仓查询 |
+| `binance/income.py` | Binance income history 同步，作为净盈亏权威数据源 |
 | `binance/orders.py` | 订单操作：下单、条件单、撤单、查询 |
 | `binance/exchange_info.py` | exchangeInfo 缓存（300s TTL），mark price、filters、精度取整 |
 | `repos/connection.py` | SQLite 连接管理、DDL 建表、WAL 模式、RLock 写锁 |
 | `repos/config_repo.py` | config 表 KV 读写 |
 | `repos/signals_repo.py` | signals_log 表 CRUD |
+| `repos/income_repo.py` | income_events 本地缓存与日/周/月 PnL 聚合 |
 | `observability/logging_setup.py` | structlog 结构化日志配置 |
 | `observability/metrics.py` | Prometheus 指标定义 |
 | `observability/alerts.py` | Webhook 告警（支持 telegram/dingtalk/raw_json） |
@@ -142,6 +144,20 @@ uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 | `PROTOCOL_MAX_ENTRY_SLIPPAGE_BPS` | `20` | LIMIT_FOK 相对信号 `entry_price` 的最大允许滑点，20 = 0.20% |
 | `PROTOCOL_MAX_ENTRY_SPREAD_BPS` | `0` | 入场前最大允许盘口价差，0 表示不启用该检查 |
 | `PROTOCOL_MARKET_ENTRY_FALLBACK` | `false` | LIMIT_FOK 失败后是否回退 MARKET。生产不建议开启，否则滑点保护会失效 |
+
+### 净盈亏同步
+
+Protocol 以 Binance `/fapi/v1/income` 为权威来源，缓存 `REALIZED_PNL`、`COMMISSION`、
+`FUNDING_FEE` 和返还类流水到本地 SQLite，再聚合日/周/月净盈亏。
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PROTOCOL_PNL_AUTO_SYNC_ENABLED` | `true` | 是否启用后台自动同步 |
+| `PROTOCOL_PNL_STARTUP_SYNC_DAYS` | `7` | 服务启动后立即同步最近 N 天 |
+| `PROTOCOL_PNL_INCREMENTAL_SYNC_DAYS` | `3` | 增量同步回看 N 天，防止延迟流水漏记 |
+| `PROTOCOL_PNL_INCREMENTAL_SYNC_INTERVAL_SEC` | `1800` | 增量同步间隔，默认 30 分钟 |
+| `PROTOCOL_PNL_FULL_SYNC_DAYS` | `90` | 全量校准同步最近 N 天，普通 income 接口适合近期历史 |
+| `PROTOCOL_PNL_FULL_SYNC_INTERVAL_SEC` | `86400` | 全量校准同步间隔，默认每天一次 |
 
 ### CORS 配置
 

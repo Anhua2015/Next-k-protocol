@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -54,6 +55,7 @@ CORS_ORIGINS = _parse_cors_origins()
 async def lifespan(app: FastAPI):
     """初始化数据库与 Binance HTTP 单例，并在进程退出时释放连接池。"""
     logger.info("Starting Next K Protocol...")
+    pnl_task = None
 
     import db
     db.init_db()
@@ -77,7 +79,18 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Binance HTTP client initialized")
 
-    yield
+    from pnl_auto_sync import pnl_auto_sync_loop
+    pnl_task = asyncio.create_task(pnl_auto_sync_loop(), name="pnl-auto-sync")
+
+    try:
+        yield
+    finally:
+        if pnl_task is not None and not pnl_task.done():
+            pnl_task.cancel()
+            try:
+                await pnl_task
+            except asyncio.CancelledError:
+                logger.info("PnL auto sync task cancelled")
     from binance.client import client as binance_client
     if binance_client is not None:
         binance_client.close()
