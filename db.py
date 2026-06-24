@@ -26,6 +26,7 @@ from repos.config_repo import (
 
 # -- Signals ----------------------------------------------------------
 from repos.signals_repo import (
+    clear_signals,
     delete_signals_older_than,
     insert_signal,
     list_signals,

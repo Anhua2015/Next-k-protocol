@@ -26,6 +26,7 @@ from models import (
     PnlClearOut,
     LivePositionOut,
     PnlSummaryOut,
+    SignalClearOut,
     PnlSyncOut,
     SignalIngestRequest,
     SignalIngestResult,
@@ -248,6 +249,21 @@ async def list_signals(
         profile_id=profile_id,
     )
     return rows
+
+
+@router.post(
+    "/signals/clear",
+    response_model=SignalClearOut,
+    summary="清理本地信号日志",
+    description="仅删除本地 signals_log 审计记录，不影响 Binance 订单或持仓。",
+)
+async def clear_signals(_: None = Depends(require_auth)):
+    try:
+        deleted = _db.clear_signals()
+    except Exception as exc:
+        logger.error("signals clear failed: %s", exc)
+        raise HTTPException(status_code=500, detail="signals_clear_failed") from exc
+    return SignalClearOut(ok=True, deleted_signals=deleted)
 
 
 # ---------------------------------------------------------------------------

@@ -25,6 +25,13 @@ def delete_signals_older_than(*, keep_hours: float = 24.0) -> int:
         return int(cur.rowcount or 0)
 
 
+def clear_signals() -> int:
+    """清空本地信号审计日志，不影响交易所订单/持仓。"""
+    with get_db(write=True) as conn:
+        cur = conn.execute("DELETE FROM signals_log")
+        return int(cur.rowcount or 0)
+
+
 def insert_signal(
     source: str,
     api_signal_id: str,

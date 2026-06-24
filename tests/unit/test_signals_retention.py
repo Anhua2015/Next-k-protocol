@@ -44,3 +44,6 @@ def test_delete_signals_older_than_keeps_recent(fresh_db):
     assert deleted == 1
     assert len(rows) == 1
     assert rows[0]["api_signal_id"] == "recent-1"
+
+    assert fresh_db.clear_signals() == 1
+    assert fresh_db.list_signals(limit=10) == []

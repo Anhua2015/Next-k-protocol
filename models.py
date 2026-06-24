@@ -106,6 +106,13 @@ class SignalIngestResult(BaseModel):
     )
 
 
+class SignalClearOut(BaseModel):
+    """信号日志清理结果。"""
+
+    ok: bool = Field(..., description="是否成功")
+    deleted_signals: int = Field(..., description="删除的 signals_log 数量")
+
+
 class LivePositionOut(BaseModel):
     """币安实时持仓视图。"""
 
