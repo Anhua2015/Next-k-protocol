@@ -1,0 +1,11 @@
+{
+  "orderId": 33333333,
+  "symbol": "BTCUSDT",
+  "status": "FILLED",
+  "executedQty": "0.014",
+  "avgPrice": "67250.50",
+  "cumQuote": "941.507",
+  "type": "LIMIT",
+  "timeInForce": "FOK",
+  "side": "BUY"
+}

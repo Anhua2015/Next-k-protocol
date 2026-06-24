@@ -54,7 +54,7 @@ def seeded_config(fresh_db):
     import sys
     import binance.account as _bacct
     for _mod in ("ingest.pipeline", "ingest.guards", "ingest.dispatcher",
-                 "trading.market_entry", "trading.limit_entry",
+                 "trading.market_entry", "trading.limit_entry", "trading.limit_fok_entry",
                  "repos.connection", "repos.config_repo", "repos.signals_repo",
                  "trader"):
         sys.modules.pop(_mod, None)

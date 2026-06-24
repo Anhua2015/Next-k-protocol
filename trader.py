@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -22,6 +23,7 @@ from binance.client import (
 )
 from binance.exchange_info import (
     EXCHANGE_INFO_TTL_SEC,
+    get_book_ticker as _book_ticker_fn,
     get_filters as _filters_fn,
     get_mark_price as _mark_px_fn,
     get_symbol_info as _sym_info_fn,
@@ -138,6 +140,7 @@ def _handle_auth_fail(context: str, pos_id: Any) -> None:
 
 def _get_filters(s):            return _filters_fn(_resolve_client(), s)
 def get_mark_price(s):          return _mark_px_fn(_resolve_client(), s)
+def get_book_ticker(s):         return _book_ticker_fn(_resolve_client(), s)
 def get_symbol_info(s):         return _sym_info_fn(_resolve_client(), s)
 def _detect_hedge_mode():       return _hedge_fn(_resolve_client())
 def get_account_summary():      return _account_summary_fn(_resolve_client())
@@ -655,12 +658,48 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
 
 # -- execute_trade (orchestrator, delegates to trading/) --------------------
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        logger.warning("bad %s=%r; fallback to %s", name, raw, default)
+        return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _entry_order_type(action: str) -> str:
+    if action == "rolling":
+        return "MARKET"
+    raw = (os.getenv("PROTOCOL_ENTRY_ORDER_TYPE") or "LIMIT_FOK").strip().upper()
+    aliases = {
+        "LIMIT-FOK": "LIMIT_FOK",
+        "FOK": "LIMIT_FOK",
+        "LIMIT": "LIMIT_FOK",
+        "MARKET": "MARKET",
+    }
+    order_type = aliases.get(raw, raw)
+    if order_type not in ("MARKET", "LIMIT_FOK"):
+        logger.warning("bad PROTOCOL_ENTRY_ORDER_TYPE=%r; fallback to LIMIT_FOK", raw)
+        return "LIMIT_FOK"
+    return order_type
+
 def execute_trade(signal: Dict[str, Any]) -> bool:
     """执行一条标准化交易动作。
 
     开仓顺序固定为：字段校验 → exchangeInfo → 逐仓/杠杆 → 持仓模式 → 标记价 →
-    MARKET 入场。仓位和止损参数完全来自 API 信号，不在执行层做策略性修改。
+    入场。默认使用 LIMIT_FOK 给 ORB 突破单增加滑点上限；必要时可通过
+    ``PROTOCOL_ENTRY_ORDER_TYPE=MARKET`` 恢复旧市价行为。
     """
+    from trading.limit_fok_entry import open_limit_fok
     from trading.market_entry import open_market
 
     signal_log_id = signal["signal_log_id"]
@@ -718,7 +757,25 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
         update_signal_status(signal_log_id, "error", f"setup: {exc}")
         return False
 
-    # Dispatch (always market; entry policy lives in next-k-api)
+    entry_order_type = _entry_order_type(action)
+    if entry_order_type == "LIMIT_FOK":
+        result = open_limit_fok(
+            signal, symbol, side, margin, leverage,
+            step_size, tick_size, min_notional, hedge, mark_px, source, play,
+            max_slippage_bps=_env_float("PROTOCOL_MAX_ENTRY_SLIPPAGE_BPS", 20.0),
+            max_spread_bps=_env_float("PROTOCOL_MAX_ENTRY_SPREAD_BPS", 0.0),
+        )
+        if result.ok:
+            return True
+        if not _env_bool("PROTOCOL_MARKET_ENTRY_FALLBACK", False):
+            return False
+        logger.warning(
+            "LIMIT_FOK failed for %s %s; falling back to MARKET because PROTOCOL_MARKET_ENTRY_FALLBACK=1",
+            side,
+            symbol,
+        )
+
+    # MARKET 保留为显式回退和 rolling 动作的兼容路径。
     result = open_market(
         signal, symbol, side, margin, leverage,
         step_size, tick_size, min_notional, hedge, mark_px, source, play,

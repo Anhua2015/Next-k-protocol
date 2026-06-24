@@ -1,0 +1,10 @@
+{
+  "orderId": 33333334,
+  "symbol": "BTCUSDT",
+  "status": "EXPIRED",
+  "executedQty": "0",
+  "avgPrice": "0",
+  "type": "LIMIT",
+  "timeInForce": "FOK",
+  "side": "BUY"
+}

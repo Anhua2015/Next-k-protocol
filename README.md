@@ -47,9 +47,10 @@ next-k-api (扫描/信号) → HTTP POST /api/binance/signals/ingest → Protoco
 | `ingest/pipeline.py` | 信号批量摄入编排，循环处理每条信号 |
 | `ingest/guards.py` | 守卫链：api_signal_id 去重 |
 | `ingest/dispatcher.py` | 信号分发：将守卫通过的信号转交 trader 执行 |
-| `trader.py` | 交易编排层：配置检查、杠杆/保证金设置、分派 MARKET/LIMIT/平仓 |
+| `trader.py` | 交易编排层：配置检查、杠杆/保证金设置、分派 LIMIT_FOK/MARKET/平仓 |
 | `trading/market_entry.py` | MARKET 市价单入场 + SL/TP 保护单 |
-| `trading/limit_entry.py` | LIMIT 限价单入场 |
+| `trading/limit_fok_entry.py` | LIMIT FOK 滑点保护入场 + SL/TP 保护单 |
+| `trading/limit_entry.py` | 旧 GTC LIMIT 入场模块（当前主链路不使用） |
 | `trading/protective.py` | SL/TP 条件单构建 + 紧急平仓 |
 | `trading/pricing.py` | 价格/数量精度取整工具（重导出） |
 | `binance/client.py` | 币安 HTTP 客户端：签名、时间同步、重试/退避 |
@@ -132,6 +133,15 @@ uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 | `BINANCE_TESTNET` | `false` | 测试网开关。`true` = testnet.binancefuture.com, `false` = fapi.binance.com |
 | `BINANCE_ENABLED` | `false` | 全局交易开关。启动时写入 DB config 表 |
 | `DATA_DIR` | `.`(当前目录) | SQLite 数据库文件目录，Railway 挂载 Volume 时通常为 `/data` |
+
+### 入场滑点保护
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PROTOCOL_ENTRY_ORDER_TYPE` | `LIMIT_FOK` | 开仓订单类型。`LIMIT_FOK` 会在滑点上限内成交，否则直接过期；`MARKET` 恢复旧市价开仓 |
+| `PROTOCOL_MAX_ENTRY_SLIPPAGE_BPS` | `20` | LIMIT_FOK 相对信号 `entry_price` 的最大允许滑点，20 = 0.20% |
+| `PROTOCOL_MAX_ENTRY_SPREAD_BPS` | `0` | 入场前最大允许盘口价差，0 表示不启用该检查 |
+| `PROTOCOL_MARKET_ENTRY_FALLBACK` | `false` | LIMIT_FOK 失败后是否回退 MARKET。生产不建议开启，否则滑点保护会失效 |
 
 ### CORS 配置
 
@@ -551,7 +561,7 @@ trader.execute_trade(signal_dict)
     │
     ├── 解析 margin_usdt / leverage
     ├── 验证 SL/TP 可解析
-    ├── 确定 entry_type（MARKET/LIMIT），rolling 强制 MARKET
+    ├── 确定 entry_order_type（默认 LIMIT_FOK；rolling 强制 MARKET）
     │
     ├── 交易前设置：
     │   ├── get_filters(symbol) -> step_size, tick_size, min_notional
@@ -561,8 +571,25 @@ trader.execute_trade(signal_dict)
     │   └── get_mark_price(symbol)
     │
     └── dispatch：
-        ├── MARKET -> market_entry.open_market()
-        └── LIMIT  -> limit_entry.open_limit()
+        ├── LIMIT_FOK -> limit_fok_entry.open_limit_fok()
+        └── MARKET    -> market_entry.open_market()
+```
+
+### LIMIT_FOK 限价保护入场（limit_fok_entry.py）
+
+```
+open_limit_fok()
+    │
+    ├── 1. 验证信号 entry_price 存在
+    ├── 2. 按最大滑点计算保护限价：
+    │      LONG  limit = entry_price × (1 + bps/10000)
+    │      SHORT limit = entry_price × (1 - bps/10000)
+    ├── 3. get_book_ticker(symbol) 检查当前 bid/ask 是否仍在保护价内
+    ├── 4. 下单 LIMIT + timeInForce=FOK + newOrderRespType=RESULT
+    ├── 5. 仅 FILLED 视为成功；EXPIRED/未成交不会留下挂单
+    ├── 6. 记录 signal_entry_price / entry_limit_price / entry_slippage_bps
+    ├── 7. 下 SL/TP 保护单
+    └── SL/TP 下单失败 -> 紧急 MARKET 平仓
 ```
 
 ### MARKET 市价入场（market_entry.py）
@@ -585,7 +612,7 @@ open_market()
 
 **Hedge 模式处理**：若检测到 hedge 模式，入场单和 SL/TP 单都带 `positionSide`（LONG/SHORT）且不使用 `reduceOnly`。
 
-### LIMIT 限价入场（limit_entry.py）
+### 旧 LIMIT 限价入场（limit_entry.py）
 
 ```
 open_limit()
@@ -598,6 +625,9 @@ open_limit()
     └── 结果 status = "submitted"
          注意：LIMIT 入场不下 SL/TP，需后续监控成交后补保护单
 ```
+
+当前主链路不使用该 GTC LIMIT 模块。GTC 入场会留下 pending 挂单，成交后还需要额外
+生命周期去补 SL/TP；默认实盘开仓使用 `LIMIT_FOK`。
 
 ### 平仓（_close_live_position）
 

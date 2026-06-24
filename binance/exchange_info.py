@@ -44,6 +44,25 @@ def get_mark_price(client: BinanceClient, symbol: str) -> float:
     return float(data["markPrice"])
 
 
+def get_book_ticker(client: BinanceClient, symbol: str) -> dict[str, float]:
+    """返回订单簿最优买卖价。
+
+    用于入场前滑点保护：MARK_PRICE 只能代表标记价，不能代表真实可成交盘口。
+    """
+    data = client.request(
+        "GET",
+        "/fapi/v1/ticker/bookTicker",
+        {"symbol": symbol},
+        signed=False,
+    )
+    return {
+        "bid_price": float(data["bidPrice"]),
+        "bid_qty": float(data.get("bidQty") or 0),
+        "ask_price": float(data["askPrice"]),
+        "ask_qty": float(data.get("askQty") or 0),
+    }
+
+
 def get_filters(client: BinanceClient, symbol: str) -> Tuple[str, str, float]:
     """返回 (stepSize, tickSize, minNotional)。"""
     info = get_symbol_info(client, symbol)
