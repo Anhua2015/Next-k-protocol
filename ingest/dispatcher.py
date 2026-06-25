@@ -9,7 +9,7 @@ logger = logging.getLogger("ingest.dispatcher")
 
 def dispatch(sig: Any, signal_log_id: int) -> Dict[str, Any]:
     """执行交易并返回 detail 字典。"""
-    from trader import execute_trade
+    from trader import execute_trade_with_status
 
     symbol = sig.symbol
     side = sig.side
@@ -48,11 +48,12 @@ def dispatch(sig: Any, signal_log_id: int) -> Dict[str, Any]:
             "client_ref": sig.client_ref or "",
             "api_signal_id": sig.api_signal_id or "",
             "action": action,
+            "entry_type": getattr(sig, "entry_type", None) or "MARKET",
         }
-        ok = execute_trade(signal_dict)
-        detail["action"] = "traded" if ok else "error"
-        if not ok:
-            detail["error"] = "execute_trade returned False"
+        status = execute_trade_with_status(signal_dict)
+        detail["action"] = status
+        if status == "error":
+            detail["error"] = "execute_trade returned error"
         return detail
     except Exception as exc:
         logger.error("dispatch execute_trade %s %s: %s", side, symbol, exc)

@@ -42,7 +42,11 @@ class SignalItem(BaseModel):
     )
     entry_price: Optional[float] = Field(
         None,
-        description="建议入场价（信号触发时的 VWAP 价格）",
+        description="建议入场价（OR±2tick Stop-Limit 触发/限价）",
+    )
+    entry_type: Optional[str] = Field(
+        "MARKET",
+        description="入场方式：MARKET | STOP_LIMIT | stoplimit_gap（ORB 推荐）",
     )
     sl_price: Optional[float] = Field(
         None,

@@ -31,6 +31,8 @@ def process_signal_batch(signals, db_module) -> SignalIngestResult:
         action = detail.get("action", "error")
         if action == "traded":
             result["traded"] += 1
+        elif action == "submitted":
+            result["traded"] += 0
         elif action == "error":
             result["errors"] += 1
         else:

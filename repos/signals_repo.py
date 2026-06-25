@@ -25,6 +25,46 @@ def delete_signals_older_than(*, keep_hours: float = 24.0) -> int:
         return int(cur.rowcount or 0)
 
 
+def get_signal_by_api_id(source: str, api_signal_id: str) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT id, status, skip_reason, action
+            FROM signals_log
+            WHERE source=? AND api_signal_id=?
+            """,
+            (source, api_signal_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def reset_signal_for_retry(
+    signal_id: int,
+    *,
+    received_at: str,
+    payload_json: Optional[str] = None,
+) -> None:
+    with get_db(write=True) as conn:
+        if payload_json is not None:
+            conn.execute(
+                """
+                UPDATE signals_log
+                SET status='received', skip_reason=NULL, received_at=?, payload_json=?, result_json=NULL
+                WHERE id=?
+                """,
+                (received_at, payload_json, signal_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE signals_log
+                SET status='received', skip_reason=NULL, received_at=?, result_json=NULL
+                WHERE id=?
+                """,
+                (received_at, signal_id),
+            )
+
+
 def insert_signal(
     source: str,
     api_signal_id: str,
