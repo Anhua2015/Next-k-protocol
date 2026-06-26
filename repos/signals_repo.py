@@ -29,13 +29,26 @@ def get_signal_by_api_id(source: str, api_signal_id: str) -> Optional[Dict[str, 
     with get_db() as conn:
         row = conn.execute(
             """
-            SELECT id, status, skip_reason, action
+            SELECT id, source, api_signal_id, symbol, side, entry_price, sl_price, tp_price,
+                   notional_usdt, status, skip_reason, action, play, result_json, payload_json,
+                   received_at
             FROM signals_log
             WHERE source=? AND api_signal_id=?
             """,
             (source, api_signal_id),
         ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    out = dict(row)
+    raw = out.get("result_json")
+    if raw:
+        try:
+            out["result"] = json.loads(raw) if isinstance(raw, str) else raw
+        except json.JSONDecodeError:
+            out["result"] = {}
+    else:
+        out["result"] = {}
+    return out
 
 
 def reset_signal_for_retry(

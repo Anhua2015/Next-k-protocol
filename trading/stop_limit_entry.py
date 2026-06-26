@@ -143,11 +143,23 @@ def open_stop_limit(
         return StopLimitEntryResult(ok=False, error="missing entry_price")
 
     stop_px = _round_price(float(signal_entry), tick_size)
-    limit_px = stop_px
+    limit_raw = signal.get("limit_price")
+    if limit_raw is not None and float(limit_raw) > 0:
+        limit_px = _round_price(float(limit_raw), tick_size)
+    else:
+        limit_px = stop_px
 
-    # 突破确认后现价常已越过 OR 边界 → STOP 会 immediate trigger，走 MARKET gap fallback
+    allow_gap_raw = signal.get("allow_gap_market")
+    allow_gap = True if allow_gap_raw is None else bool(allow_gap_raw)
+
+    # preplace：现价未穿越时应正常挂 STOP；已穿越且禁止 gap 则拒单
     gap_crossed = (side == "LONG" and mark_px >= stop_px) or (side == "SHORT" and mark_px <= stop_px)
-    if gap_crossed:
+    if gap_crossed and not allow_gap:
+        msg = f"gap_exceeds_limit mark={mark_px:.6f} stop={stop_px:.6f} limit={limit_px:.6f}"
+        logger.info("stop_limit reject gap %s %s: %s", side, symbol, msg)
+        update_signal_status(signal_log_id, "error", msg)
+        return StopLimitEntryResult(ok=False, error=msg)
+    if gap_crossed and allow_gap:
         logger.info(
             "stop_limit gap fallback MARKET %s %s mark=%.6f entry=%.6f",
             side, symbol, mark_px, stop_px,
@@ -232,6 +244,7 @@ def open_stop_limit(
                 "entry_order_id": entry_order_id,
                 "quantity": qty,
                 "entry_price": stop_px,
+                "limit_price": limit_px,
                 "entry_type": "STOP_LIMIT",
                 "stop_price": stop_px,
                 "notional_usdt": margin * leverage,
@@ -240,6 +253,7 @@ def open_stop_limit(
                 "side": side,
                 "sl_price": signal.get("sl_price"),
                 "tp_price": signal.get("tp_price"),
+                "oco_peer_api_id": signal.get("oco_peer_api_id") or "",
             },
         )
         logger.info(
@@ -256,6 +270,12 @@ def open_stop_limit(
         )
     except Exception as exc:
         if _immediate_trigger_error(exc):
+            allow_gap_raw = signal.get("allow_gap_market")
+            allow_gap = True if allow_gap_raw is None else bool(allow_gap_raw)
+            if not allow_gap:
+                logger.info("STOP immediate trigger rejected %s %s: %s", side, symbol, exc)
+                update_signal_status(signal_log_id, "error", f"immediate_trigger: {exc}")
+                return StopLimitEntryResult(ok=False, error=str(exc))
             logger.info("STOP immediate trigger → MARKET gap fallback %s %s: %s", side, symbol, exc)
             from trading.market_entry import open_market
 

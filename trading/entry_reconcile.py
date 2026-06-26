@@ -11,6 +11,34 @@ logger = logging.getLogger("trading.entry_reconcile")
 _PENDING_TTL_HOURS = 8.0
 
 
+def _cancel_oco_peer(*, filled_row: Dict[str, Any], result: Dict[str, Any]) -> None:
+    peer_api_id = str(result.get("oco_peer_api_id") or "").strip()
+    if not peer_api_id:
+        return
+    from db import get_signal_by_api_id, update_signal_status
+
+    peer = get_signal_by_api_id(str(filled_row.get("source") or ""), peer_api_id)
+    if not peer:
+        return
+    peer_status = str(peer.get("status") or "").lower()
+    if peer_status != "submitted":
+        return
+    try:
+        peer_result = json.loads(peer.get("result_json") or "{}")
+    except json.JSONDecodeError:
+        peer_result = {}
+    entry_order_id = str(peer_result.get("entry_order_id") or "")
+    symbol = str(peer.get("symbol") or "")
+    if entry_order_id and symbol:
+        from trader import cancel_order_by_id
+
+        try:
+            cancel_order_by_id(symbol, entry_order_id)
+        except Exception as exc:
+            logger.warning("cancel oco peer %s %s: %s", symbol, peer_api_id, exc)
+    update_signal_status(int(peer["id"]), "cancelled", "oco_peer_filled")
+
+
 def reconcile_pending_entry_orders() -> int:
     """处理 status=submitted 的 STOP 入场单。返回 promote 成功数。"""
     from db import list_signals, update_signal_status
@@ -62,6 +90,7 @@ def reconcile_pending_entry_orders() -> int:
                 mark_px=mark_px,
                 source=str(row.get("source") or ""),
             ):
+                _cancel_oco_peer(filled_row=row, result=result)
                 promoted += 1
             continue
 

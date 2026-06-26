@@ -38,6 +38,9 @@ def dispatch(sig: Any, signal_log_id: int) -> Dict[str, Any]:
                 float(sig.leverage) if getattr(sig, "leverage", None) is not None else None
             ),
             "entry_price": float(sig.entry_price) if sig.entry_price is not None else None,
+            "limit_price": float(sig.limit_price) if getattr(sig, "limit_price", None) is not None else None,
+            "allow_gap_market": getattr(sig, "allow_gap_market", None),
+            "oco_peer_api_id": getattr(sig, "oco_peer_api_id", None) or "",
             "sl_price": float(sig.sl_price) if sig.sl_price is not None else None,
             "tp_price": float(sig.tp_price) if sig.tp_price is not None else None,
             "close_price": (
