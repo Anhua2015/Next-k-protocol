@@ -81,7 +81,24 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Binance HTTP client initialized")
 
+    import asyncio
+
+    async def _reconcile_loop() -> None:
+        while True:
+            await asyncio.sleep(60)
+            try:
+                from trading.entry_reconcile import reconcile_pending_entry_orders
+
+                promoted = reconcile_pending_entry_orders()
+                if promoted:
+                    logger.info("background entry reconcile promoted=%d", promoted)
+            except Exception as exc:
+                logger.warning("background entry reconcile failed: %s", exc)
+
+    reconcile_task = asyncio.create_task(_reconcile_loop())
+
     yield
+    reconcile_task.cancel()
     logger.info("Next K Protocol shutting down")
 
 

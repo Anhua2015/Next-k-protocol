@@ -34,7 +34,7 @@ def _signal_payload(sig: Any) -> Dict[str, Any]:
 
 
 def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
-    """去重：insert_signal 返回 None = 已存在。"""
+    """去重：insert_signal 返回 None = 已存在；error/cancelled 允许重试。"""
     from binance.time_sync import now_utc
     payload = _signal_payload(sig)
     action = (getattr(sig, "action", None) or "").strip().lower()
@@ -42,6 +42,7 @@ def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
         action = "rolling"
     if not action:
         action = "open"
+    payload_json = json.dumps(payload, ensure_ascii=False, default=str)
     sid = ctx.db.insert_signal(
         source=sig.source, api_signal_id=sig.api_signal_id,
         symbol=sig.symbol, side=sig.side,
@@ -52,9 +53,24 @@ def guard_dedup_insert(sig: Any, ctx: Any) -> GuardDecision:
         profile_id=getattr(sig, "profile_id", None),
         client_ref=getattr(sig, "client_ref", None) or "",
         action=action,
-        payload_json=json.dumps(payload, ensure_ascii=False, default=str),
+        payload_json=payload_json,
     )
     if sid is None:
+        existing = ctx.db.get_signal_by_api_id(sig.source, sig.api_signal_id)
+        prev_status = str((existing or {}).get("status") or "").lower()
+        if existing and prev_status in ("error", "cancelled"):
+            ctx.db.reset_signal_for_retry(
+                int(existing["id"]),
+                received_at=now_utc(),
+                payload_json=payload_json,
+            )
+            logger.info(
+                "ingest retry: source=%s id=%s prev_status=%s",
+                sig.source,
+                sig.api_signal_id,
+                prev_status,
+            )
+            return GuardDecision(skip=False, signal_log_id=int(existing["id"]))
         return GuardDecision(skip=True, action="duplicate")
     return GuardDecision(skip=False, signal_log_id=sid)
 

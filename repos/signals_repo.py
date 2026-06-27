@@ -25,6 +25,59 @@ def delete_signals_older_than(*, keep_hours: float = 24.0) -> int:
         return int(cur.rowcount or 0)
 
 
+def get_signal_by_api_id(source: str, api_signal_id: str) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT id, source, api_signal_id, symbol, side, entry_price, sl_price, tp_price,
+                   notional_usdt, status, skip_reason, action, play, result_json, payload_json,
+                   received_at
+            FROM signals_log
+            WHERE source=? AND api_signal_id=?
+            """,
+            (source, api_signal_id),
+        ).fetchone()
+    if not row:
+        return None
+    out = dict(row)
+    raw = out.get("result_json")
+    if raw:
+        try:
+            out["result"] = json.loads(raw) if isinstance(raw, str) else raw
+        except json.JSONDecodeError:
+            out["result"] = {}
+    else:
+        out["result"] = {}
+    return out
+
+
+def reset_signal_for_retry(
+    signal_id: int,
+    *,
+    received_at: str,
+    payload_json: Optional[str] = None,
+) -> None:
+    with get_db(write=True) as conn:
+        if payload_json is not None:
+            conn.execute(
+                """
+                UPDATE signals_log
+                SET status='received', skip_reason=NULL, received_at=?, payload_json=?, result_json=NULL
+                WHERE id=?
+                """,
+                (received_at, payload_json, signal_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE signals_log
+                SET status='received', skip_reason=NULL, received_at=?, result_json=NULL
+                WHERE id=?
+                """,
+                (received_at, signal_id),
+            )
+
+
 def insert_signal(
     source: str,
     api_signal_id: str,

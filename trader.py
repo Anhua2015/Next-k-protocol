@@ -636,8 +636,24 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
 # -- execute_trade (orchestrator, delegates to trading/) --------------------
 
 def execute_trade(signal: Dict[str, Any]) -> bool:
-    """开仓调度：设杠杆/保证金→市价开仓；平仓走独立路径。"""
+    """开仓调度：设杠杆/保证金→按 entry_type 下单；平仓走独立路径。"""
+    return execute_trade_with_status(signal) in ("traded", "submitted")
+
+
+def _normalize_entry_type(raw: Any) -> str:
+    v = str(raw or "MARKET").strip().upper().replace("-", "_")
+    if v in ("STOPLIMIT_GAP", "STOP_LIMIT_GAP", "STOPLIMIT"):
+        return "STOP_LIMIT"
+    return v
+
+
+def execute_trade_with_status(signal: Dict[str, Any]) -> str:
+    """返回 traded | submitted | error。"""
+    from trading.entry_reconcile import reconcile_pending_entry_orders
     from trading.market_entry import open_market
+    from trading.stop_limit_entry import open_stop_limit
+
+    reconcile_pending_entry_orders()
 
     signal_log_id = signal["signal_log_id"]
     symbol = signal["symbol"]
@@ -645,44 +661,44 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     source = signal.get("source", "") or ""
     play = signal.get("play", "") or ""
     action = str(signal.get("action", "") or "").lower()
+    entry_type = _normalize_entry_type(signal.get("entry_type"))
 
-    logger.info("execute_trade: source=%s symbol=%s side=%s play=%s id=%s",
-                source, symbol, side, play, signal_log_id)
+    logger.info(
+        "execute_trade: source=%s symbol=%s side=%s play=%s id=%s entry_type=%s",
+        source, symbol, side, play, signal_log_id, entry_type,
+    )
 
     if action == "close":
-        return _close_live_position(signal)
+        return "traded" if _close_live_position(signal) else "error"
 
     if is_execution_paused():
         update_signal_status(signal_log_id, "error", "execution_paused")
-        return False
+        return "error"
 
-    # Resolve margin/leverage
     try:
         margin = float(signal.get("margin_usdt", 0) or 0)
         leverage = int(float(signal.get("leverage", 0) or 0))
     except (TypeError, ValueError) as exc:
         logger.error("config parse failed %s: %s", symbol, exc)
         update_signal_status(signal_log_id, "error", f"bad signal leverage/margin: {exc}")
-        return False
+        return "error"
 
-    logger.info("execute_trade %s: source=%s margin=%.0f leverage=%d",
-                symbol, source, margin, leverage)
+    logger.info("execute_trade %s: source=%s margin=%.0f leverage=%d entry=%s",
+                symbol, source, margin, leverage, entry_type)
 
-    # Validate signal
     try:
         float(signal.get("sl_price")) if signal.get("sl_price") is not None else None
         float(signal.get("tp_price")) if signal.get("tp_price") is not None else None
     except (TypeError, ValueError) as exc:
         logger.error("signal SL/TP parse failed %s: %s", symbol, exc)
         update_signal_status(signal_log_id, "error", f"bad signal SL/TP: {exc}")
-        return False
+        return "error"
 
     if margin <= 0 or leverage <= 0:
         update_signal_status(signal_log_id, "error",
                              f"invalid margin={margin} leverage={leverage}")
-        return False
+        return "error"
 
-    # Setup: filters + leverage + margin type + hedge mode
     try:
         step_size, tick_size, min_notional = _get_filters(symbol)
         set_margin_type(symbol)
@@ -692,11 +708,21 @@ def execute_trade(signal: Dict[str, Any]) -> bool:
     except Exception as exc:
         logger.error("setup failed %s %s: %s", side, symbol, exc)
         update_signal_status(signal_log_id, "error", f"setup: {exc}")
-        return False
+        return "error"
 
-    # Dispatch (always market; entry policy lives in next-k-api)
+    if entry_type == "STOP_LIMIT":
+        result = open_stop_limit(
+            signal, symbol, side, margin, leverage,
+            step_size, tick_size, min_notional, hedge, mark_px, source, play,
+        )
+        if not result.ok:
+            return "error"
+        if result.submitted:
+            return "submitted"
+        return "traded"
+
     result = open_market(
         signal, symbol, side, margin, leverage,
         step_size, tick_size, min_notional, hedge, mark_px, source, play,
     )
-    return result.ok
+    return "traded" if result.ok else "error"

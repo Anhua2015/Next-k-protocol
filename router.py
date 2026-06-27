@@ -240,6 +240,32 @@ async def list_signals(
     return rows
 
 
+@router.get(
+    "/signals/lookup",
+    summary="按 api_signal_id 查询单条信号",
+)
+async def lookup_signal(
+    source: str = Query(..., description="信号来源，如 orb"),
+    api_signal_id: str = Query(..., description="原始信号 ID"),
+):
+    row = _db.get_signal_by_api_id(source, api_signal_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="signal_not_found")
+    return row
+
+
+@router.post(
+    "/maintenance/reconcile-entries",
+    summary="对账 pending STOP 入场单",
+)
+async def reconcile_entries():
+    from trading.entry_reconcile import reconcile_pending_entry_orders
+
+    with _db._db_write_lock:
+        promoted = reconcile_pending_entry_orders()
+    return {"ok": True, "promoted": int(promoted or 0)}
+
+
 # ---------------------------------------------------------------------------
 # Positions
 # ---------------------------------------------------------------------------

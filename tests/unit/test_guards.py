@@ -39,9 +39,19 @@ class TestGuardDedupInsert:
     def test_duplicate_skips(self):
         ctx = FakeCtx()
         ctx.db.insert_signal.return_value = None
+        ctx.db.get_signal_by_api_id.return_value = {"id": 7, "status": "traded"}
         d = guard_dedup_insert(FakeSignal(), ctx)
         assert d.skip
         assert d.action == "duplicate"
+
+    def test_duplicate_retries_after_error(self):
+        ctx = FakeCtx()
+        ctx.db.insert_signal.return_value = None
+        ctx.db.get_signal_by_api_id.return_value = {"id": 9, "status": "error"}
+        d = guard_dedup_insert(FakeSignal(), ctx)
+        assert not d.skip
+        assert d.signal_log_id == 9
+        ctx.db.reset_signal_for_retry.assert_called_once()
 
 
 class TestGuardChain:

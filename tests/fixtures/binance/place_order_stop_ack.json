@@ -1,0 +1,10 @@
+{
+  "orderId": 33333333,
+  "symbol": "BTCUSDT",
+  "status": "NEW",
+  "executedQty": "0",
+  "type": "STOP",
+  "side": "BUY",
+  "price": "67000.00",
+  "stopPrice": "67000.00"
+}
