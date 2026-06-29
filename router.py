@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Query
 import db as _db
 from models import (
     AccountSummaryOut,
+    CancelPendingEntriesRequest,
     LivePositionOut,
     SignalIngestRequest,
     SignalIngestResult,
@@ -264,6 +265,22 @@ async def reconcile_entries():
     with _db._db_write_lock:
         promoted = reconcile_pending_entry_orders()
     return {"ok": True, "promoted": int(promoted or 0)}
+
+
+@router.post(
+    "/maintenance/cancel-pending-entries",
+    summary="撤销 pending STOP 入场单",
+)
+async def cancel_pending_entries(body: CancelPendingEntriesRequest):
+    from trading.entry_cancel import cancel_pending_entries_by_api_ids
+
+    with _db._db_write_lock:
+        cancelled = cancel_pending_entries_by_api_ids(
+            body.source,
+            body.api_signal_ids,
+            body.reason,
+        )
+    return {"ok": True, "cancelled": int(cancelled or 0)}
 
 
 # ---------------------------------------------------------------------------

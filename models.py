@@ -132,6 +132,18 @@ class SignalIngestResult(BaseModel):
         default_factory=list,
         description="每条信号的处理详情",
     )
+    oco_rollback: int = Field(0, description="OCO 不完整时撤销的 pending 腿数")
+
+
+class CancelPendingEntriesRequest(BaseModel):
+    source: str = Field("orb", description="信号来源")
+    api_signal_ids: List[str] = Field(..., min_length=1, max_length=50)
+    reason: str = Field("entry_deadline_expired", description="撤单原因写入 skip_reason")
+
+
+class CancelPendingEntriesResult(BaseModel):
+    ok: bool = True
+    cancelled: int = Field(0, description="成功撤销的 pending 入场单数")
 
 
 class LivePositionOut(BaseModel):
