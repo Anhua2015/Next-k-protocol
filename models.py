@@ -68,6 +68,18 @@ class SignalItem(BaseModel):
         None,
         description="止盈价格，由 next-k-api 计算后推送。Protocol 不做二次计算",
     )
+    or_high: Optional[float] = Field(
+        None,
+        description="Preplace OR 高点；or_range SL 锚定用",
+    )
+    or_low: Optional[float] = Field(
+        None,
+        description="Preplace OR 低点；or_range SL 锚定用",
+    )
+    sl_risk_dist: Optional[float] = Field(
+        None,
+        description="STOP 触发价与 SL 的距离；fill 后平移 SL（atr 模式）",
+    )
     close_price: Optional[float] = Field(
         None,
         description="建议平仓价；有值且非收盘平仓时 LIMIT 减仓，否则 MARKET",

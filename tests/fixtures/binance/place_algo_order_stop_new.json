@@ -1,0 +1,14 @@
+{
+  "algoId": 44444444,
+  "clientAlgoId": "orb-entry-stop",
+  "algoType": "CONDITIONAL",
+  "symbol": "COINUSDT",
+  "side": "SELL",
+  "type": "STOP",
+  "algoStatus": "NEW",
+  "triggerPrice": "148.98",
+  "price": "148.90",
+  "quantity": "10",
+  "actualQty": "0",
+  "actualPrice": "0"
+}

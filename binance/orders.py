@@ -19,6 +19,62 @@ def place_algo_order(client: BinanceClient, params: Dict[str, Any]) -> Dict[str,
     return client.request("POST", "/fapi/v1/algoOrder", params)
 
 
+def build_entry_stop_limit_algo_params(
+    *,
+    symbol: str,
+    side: str,
+    qty: float,
+    trigger_price: float,
+    limit_price: float,
+    position_side: Optional[str] = None,
+    working_type: str = "CONTRACT_PRICE",
+) -> Dict[str, Any]:
+    """STOP (stop-limit) entry via Algo Service — required since 2025-12-09 (-4120)."""
+    params: Dict[str, Any] = {
+        "algoType": "CONDITIONAL",
+        "symbol": symbol,
+        "side": side,
+        "type": "STOP",
+        "timeInForce": "GTC",
+        "quantity": qty,
+        "price": limit_price,
+        "triggerPrice": trigger_price,
+        "workingType": working_type,
+        "newOrderRespType": "RESULT",
+    }
+    if position_side:
+        params["positionSide"] = position_side
+    return params
+
+
+def normalize_algo_entry_order(algo: Dict[str, Any]) -> Dict[str, Any]:
+    """Map algo order payload to regular order shape for entry reconcile."""
+    status = str(algo.get("algoStatus") or algo.get("status") or "").upper()
+    try:
+        actual_qty = float(algo.get("actualQty") or 0)
+    except (TypeError, ValueError):
+        actual_qty = 0.0
+    try:
+        actual_price = float(algo.get("actualPrice") or 0)
+    except (TypeError, ValueError):
+        actual_price = 0.0
+
+    order_id = algo.get("actualOrderId") or algo.get("algoId") or algo.get("orderId")
+
+    if actual_qty > 0 and actual_price > 0:
+        return {
+            "status": "FILLED",
+            "executedQty": actual_qty,
+            "avgPrice": actual_price,
+            "orderId": order_id,
+        }
+
+    if status in ("CANCELED", "CANCELLED", "EXPIRED", "REJECTED"):
+        return {"status": "CANCELED", "executedQty": 0, "avgPrice": 0, "orderId": order_id}
+
+    return {"status": "NEW", "executedQty": 0, "avgPrice": 0, "orderId": order_id}
+
+
 def get_algo_order(client: BinanceClient, algo_id: str) -> Dict[str, Any]:
     return client.request("GET", "/fapi/v1/algoOrder", {"algoId": algo_id})
 

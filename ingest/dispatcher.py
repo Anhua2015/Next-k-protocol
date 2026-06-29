@@ -43,6 +43,11 @@ def dispatch(sig: Any, signal_log_id: int) -> Dict[str, Any]:
             "oco_peer_api_id": getattr(sig, "oco_peer_api_id", None) or "",
             "sl_price": float(sig.sl_price) if sig.sl_price is not None else None,
             "tp_price": float(sig.tp_price) if sig.tp_price is not None else None,
+            "or_high": float(sig.or_high) if getattr(sig, "or_high", None) is not None else None,
+            "or_low": float(sig.or_low) if getattr(sig, "or_low", None) is not None else None,
+            "sl_risk_dist": (
+                float(sig.sl_risk_dist) if getattr(sig, "sl_risk_dist", None) is not None else None
+            ),
             "close_price": (
                 float(sig.close_price) if sig.close_price is not None else None
             ),
