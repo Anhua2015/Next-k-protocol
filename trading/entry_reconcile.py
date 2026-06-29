@@ -82,7 +82,11 @@ def reconcile_pending_entry_orders() -> int:
             else:
                 order = get_order(symbol, entry_order_id)
         except Exception as exc:
-            logger.warning("reconcile get_order %s %s: %s", symbol, entry_order_id, exc)
+            msg = str(exc)
+            if "-2013" in msg or "order does not exist" in msg.lower():
+                logger.debug("reconcile get_order %s %s (not yet visible): %s", symbol, entry_order_id, exc)
+            else:
+                logger.warning("reconcile get_order %s %s: %s", symbol, entry_order_id, exc)
             continue
 
         status = str(order.get("status") or "").upper()

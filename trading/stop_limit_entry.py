@@ -128,6 +128,7 @@ def _attach_protective(
             "tp_order_id": tp_order_id,
             "notional_usdt": margin * leverage,
             "entry_type": "STOP_LIMIT",
+            "entry_is_algo": True,
         },
     )
     from observability.metrics import TRADES_OPENED

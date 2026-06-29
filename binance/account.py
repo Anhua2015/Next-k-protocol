@@ -48,6 +48,13 @@ def set_margin_type(client: BinanceClient, symbol: str) -> None:
     try:
         client.request("POST", "/fapi/v1/marginType", {"symbol": symbol, "marginType": "ISOLATED"})
     except httpx.HTTPStatusError as e:
+        try:
+            code = e.response.json().get("code")
+            # -4046: already ISOLATED; -4067: open orders block re-set (same effective state)
+            if code in (-4046, -4067):
+                return
+        except Exception:
+            pass
         if "No need to change margin type" in (e.response.text or ""):
             return
         raise
