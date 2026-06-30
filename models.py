@@ -58,7 +58,7 @@ class SignalItem(BaseModel):
     )
     entry_type: Optional[str] = Field(
         "MARKET",
-        description="入场方式：MARKET | STOP_LIMIT | stoplimit_gap（ORB 推荐）",
+        description="入场方式：MARKET | LIMIT（FVG prox）| STOP_LIMIT | stoplimit_gap",
     )
     sl_price: Optional[float] = Field(
         None,

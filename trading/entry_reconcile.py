@@ -59,7 +59,7 @@ def reconcile_pending_entry_orders() -> int:
             result = json.loads(row.get("result_json") or "{}")
         except json.JSONDecodeError:
             result = {}
-        if str(result.get("entry_type") or "").upper() not in ("STOP_LIMIT", "STOP"):
+        if str(result.get("entry_type") or "").upper() not in ("STOP_LIMIT", "STOP", "LIMIT"):
             continue
 
         entry_order_id = str(result.get("entry_order_id") or "")
@@ -93,9 +93,17 @@ def reconcile_pending_entry_orders() -> int:
         if status == "FILLED":
             step_size, tick_size, _ = _get_filters(symbol)
             mark_px = get_mark_price(symbol)
-            from trading.stop_limit_entry import finalize_filled_entry
+            entry_type = str(result.get("entry_type") or "").upper()
+            if entry_type == "LIMIT":
+                from trading.limit_entry import finalize_filled_limit_entry
 
-            if finalize_filled_entry(
+                finalize = finalize_filled_limit_entry
+            else:
+                from trading.stop_limit_entry import finalize_filled_entry
+
+                finalize = finalize_filled_entry
+
+            if finalize(
                 row,
                 order=order,
                 tick_size=tick_size,

@@ -1,4 +1,4 @@
-"""Cancel pending STOP / algo entry orders by api_signal_id."""
+"""Cancel pending STOP / LIMIT entry orders by api_signal_id."""
 from __future__ import annotations
 
 import json

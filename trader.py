@@ -721,6 +721,19 @@ def execute_trade_with_status(signal: Dict[str, Any]) -> str:
             return "submitted"
         return "traded"
 
+    if entry_type == "LIMIT":
+        from trading.limit_entry import open_limit
+
+        result = open_limit(
+            signal, symbol, side, margin, leverage,
+            step_size, tick_size, min_notional, hedge, mark_px, source, play,
+        )
+        if not result.ok:
+            return "error"
+        if result.submitted:
+            return "submitted"
+        return "traded"
+
     result = open_market(
         signal, symbol, side, margin, leverage,
         step_size, tick_size, min_notional, hedge, mark_px, source, play,

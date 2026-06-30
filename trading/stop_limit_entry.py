@@ -65,6 +65,7 @@ def _attach_protective(
     position_side: Optional[str],
     source: str,
     play: str,
+    entry_type: str = "STOP_LIMIT",
 ) -> tuple[bool, str]:
     from binance.exchange_info import round_price as _round_price
     from db import update_signal_execution
@@ -127,13 +128,13 @@ def _attach_protective(
             "sl_order_id": sl_order_id,
             "tp_order_id": tp_order_id,
             "notional_usdt": margin * leverage,
-            "entry_type": "STOP_LIMIT",
-            "entry_is_algo": True,
+            "entry_type": entry_type,
+            "entry_is_algo": entry_type == "STOP_LIMIT",
         },
     )
     from observability.metrics import TRADES_OPENED
 
-    TRADES_OPENED.labels(source=source, side=side, entry_type="STOP_LIMIT").inc()
+    TRADES_OPENED.labels(source=source, side=side, entry_type=entry_type).inc()
     sl_log = f"{final_sl_p:.6f}" if final_sl_p is not None else "-"
     tp_log = f"{final_tp_p:.6f}" if final_tp_p is not None else "-"
     logger.info(
@@ -375,5 +376,6 @@ def finalize_filled_entry(
         position_side=position_side,
         source=source,
         play=str(signal_row.get("play") or ""),
+        entry_type=str(result.get("entry_type") or "STOP_LIMIT").upper(),
     )
     return ok

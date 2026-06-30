@@ -257,7 +257,7 @@ async def lookup_signal(
 
 @router.post(
     "/maintenance/reconcile-entries",
-    summary="对账 pending STOP 入场单",
+    summary="对账 pending STOP/LIMIT 入场单",
 )
 async def reconcile_entries():
     from trading.entry_reconcile import reconcile_pending_entry_orders
