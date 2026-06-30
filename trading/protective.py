@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from binance.client import BinanceClient
 from binance.orders import cancel_all_orders, place_algo_order, place_order
+from common.exceptions import EmergencyCloseFailedError
 
 logger = logging.getLogger("trading.protective")
 
@@ -93,6 +94,17 @@ def emergency_close(
         return None
 
 
+def emergency_close_strict(
+    client: BinanceClient, symbol: str, side: str,
+    qty: float, position_side: Optional[str],
+) -> str:
+    """紧急 MARKET 平仓；失败则抛 EmergencyCloseFailedError（裸仓告警）。"""
+    oid = emergency_close(client, symbol, side, qty, position_side)
+    if not oid:
+        raise EmergencyCloseFailedError(symbol=symbol, qty=qty)
+    return oid
+
+
 def _parse_tick(tick: str) -> float:
     try:
         return float(tick)
@@ -162,6 +174,47 @@ def _ensure_sl_clear_of_mark(
         widened = True
     raise ValueError(
         f"SL {original_sl} unfixable vs mark {mark_px} after widen (tick={tick})")
+
+
+def place_sl_strict(
+    *,
+    place_fn: Callable[[float], Dict[str, Any]],
+    side: str,
+    sl_price: float,
+    mark_px: float,
+    tick: str,
+    max_attempts: int = 2,
+    mark_px_fn: Optional[Callable[[], float]] = None,
+) -> Tuple[float, Dict[str, Any]]:
+    """严格按信号 SL 下单；不放宽。无效或失败则抛异常（由调用方 emergency close）。"""
+
+    def _current_mark() -> float:
+        if mark_px_fn is not None:
+            try:
+                return float(mark_px_fn())
+            except Exception as exc:
+                logger.warning("mark refresh failed, using cached mark: %s", exc)
+        return mark_px
+
+    last_exc: Optional[BaseException] = None
+    for attempt in range(max_attempts):
+        current_mark = _current_mark()
+        validate_sl_distance(side, sl_price, current_mark, tick)
+        try:
+            resp = place_fn(sl_price)
+            return sl_price, resp
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_attempts - 1 and protective_placement_retryable(exc):
+                logger.warning(
+                    "SL strict retry %s/%s %s @ %.6f mark=%.6f: %s",
+                    attempt + 1, max_attempts, side, sl_price, current_mark, exc,
+                )
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("SL placement exhausted without response")
 
 
 def place_sl_with_mark_retries(

@@ -149,6 +149,10 @@ def cancel_all_orders(s, p=None): return _cancel_all(_resolve_client(), s, p)
 def _emergency_close(sym, side, qty, ps):
     return _emergency_close_fn(_resolve_client(), sym, side, qty, ps)
 
+def emergency_close_position(sym, side, qty, ps):
+    from trading.protective import emergency_close_strict
+    return emergency_close_strict(_resolve_client(), sym, side, qty, ps)
+
 def _validate_sl_distance(side, sl, mark, tick):
     return _validate_sl_distance_fn(side, sl, mark, tick)
 
@@ -498,8 +502,17 @@ def _cancel_open_protective_orders(
 
 
 def _is_session_close_signal(signal: Dict[str, Any]) -> bool:
-    ref = str(signal.get("api_signal_id") or signal.get("client_ref") or "")
-    return ":session_close:" in ref
+    ref = str(signal.get("api_signal_id") or signal.get("client_ref") or "").lower()
+    if ":session_close:" in ref:
+        return True
+    return ref.endswith(":session_close")
+
+
+def _sync_time_before_close() -> None:
+    try:
+        _resolve_client()._sync_server_time()
+    except Exception as exc:
+        logger.warning("pre-close time sync failed: %s", exc)
 
 
 def _record_close_already_flat(signal: Dict[str, Any]) -> bool:
@@ -548,8 +561,6 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
     requested_side = str(signal["side"]).upper()
     source = signal.get("source", "") or ""
 
-    from binance.exchange_info import round_price as _round_price
-
     live_pos = get_live_position(symbol)
     if not live_pos:
         return _record_close_already_flat(signal)
@@ -569,34 +580,24 @@ def _close_live_position(signal: Dict[str, Any]) -> bool:
 
     hedge_mode = _detect_hedge_mode()
     position_side = _position_side_for_live_pos(live_pos, hedge_mode)
-    qty = abs(amt)
+    step_size, _, _ = _get_filters(symbol)
+    qty = _round_quantity(abs(amt), step_size)
+    if qty <= 0:
+        qty = abs(amt)
+    if qty <= 0:
+        update_signal_status(signal_log_id, "error", "close_qty_zero_after_round")
+        return False
 
     try:
         cancel_all_orders(symbol)
+        _sync_time_before_close()
         close_side = "SELL" if actual_side == "LONG" else "BUY"
-        close_raw = signal.get("close_price")
-        use_limit = (
-            not _is_session_close_signal(signal)
-            and close_raw is not None
-            and float(close_raw) > 0
-        )
         params: Dict[str, Any] = {
             "symbol": symbol,
             "side": close_side,
             "quantity": qty,
+            "type": "MARKET",
         }
-        if use_limit:
-            _, tick_size, _ = _get_filters(symbol)
-            limit_price = _round_price(float(close_raw), tick_size)
-            params.update(
-                {
-                    "type": "LIMIT",
-                    "timeInForce": "GTC",
-                    "price": limit_price,
-                }
-            )
-        else:
-            params.update({"type": "MARKET"})
         if not position_side:
             params["reduceOnly"] = "true"
         if position_side:

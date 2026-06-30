@@ -68,9 +68,25 @@ def _attach_protective(
     entry_type: str = "STOP_LIMIT",
 ) -> tuple[bool, str]:
     from binance.exchange_info import round_price as _round_price
-    from db import update_signal_execution
-    from trader import _emergency_close, _place_protective, cancel_all_orders
-    from trading.protective import place_sl_with_mark_retries
+    from db import update_signal_execution, update_signal_status
+    from trader import _place_protective, cancel_all_orders, get_mark_price
+    from trading.protective import place_sl_strict
+    from common.exceptions import EmergencyCloseFailedError
+
+    def _abort_unprotected(reason: str) -> tuple[bool, str]:
+        try:
+            cancel_all_orders(symbol)
+        except Exception:
+            pass
+        try:
+            from trader import emergency_close_position
+            emergency_close_position(symbol, side, qty, position_side)
+        except EmergencyCloseFailedError:
+            update_signal_status(signal_log_id, "error", f"{reason}; emergency_close_failed")
+            logger.critical("NAKED POSITION %s %s qty=%s — %s", side, symbol, qty, reason)
+            return False, f"{reason}; emergency_close_failed"
+        update_signal_status(signal_log_id, "error", reason)
+        return False, reason
 
     signal_log_id = signal["signal_log_id"]
     sl_price = None
@@ -85,46 +101,37 @@ def _attach_protective(
     final_sl_p = _round_price(sl_price, tick_size) if sl_price else None
     final_tp_p = _round_price(tp_price, tick_size) if tp_price else None
 
-    sl_widened_for_mark = False
+    if final_sl_p is None:
+        return _abort_unprotected("missing_sl")
+
+    try:
+        mark_px = get_mark_price(symbol)
+    except Exception as exc:
+        logger.warning("mark refresh before SL %s: %s", symbol, exc)
+
     sl_order_id = ""
     tp_order_id = ""
     try:
-        if final_sl_p is not None:
-            final_sl_p, sl_widened_for_mark, sl_resp = place_sl_with_mark_retries(
-                place_fn=lambda sl_px: _place_protective(
-                    symbol, close_side, sl_px, qty, position_side, tick_size, "SL",
-                ),
-                side=side,
-                sl_price=final_sl_p,
-                mark_px=mark_px,
-                tick=tick_size,
-            )
-            sl_order_id = str(sl_resp.get("algoId", "") or sl_resp.get("orderId", ""))
+        final_sl_p, sl_resp = place_sl_strict(
+            place_fn=lambda sl_px: _place_protective(
+                symbol, close_side, sl_px, qty, position_side, tick_size, "SL",
+            ),
+            side=side,
+            sl_price=final_sl_p,
+            mark_px=mark_px,
+            tick=tick_size,
+            mark_px_fn=lambda: get_mark_price(symbol),
+        )
+        sl_order_id = str(sl_resp.get("algoId", "") or sl_resp.get("orderId", ""))
         if final_tp_p is not None:
             tp_resp = _place_protective(symbol, close_side, final_tp_p, qty, position_side, tick_size, "TP")
             tp_order_id = str(tp_resp.get("algoId", "") or tp_resp.get("orderId", ""))
     except ValueError as exc:
-        logger.error("SL unfixable %s %s: %s", side, symbol, exc)
-        try:
-            cancel_all_orders(symbol)
-        except Exception:
-            pass
-        _emergency_close(symbol, side, qty, position_side)
-        from db import update_signal_status
-
-        update_signal_status(signal_log_id, "error", f"sl_validation: {exc}")
-        return False, str(exc)
+        logger.error("SL invalid %s %s — emergency close: %s", side, symbol, exc)
+        return _abort_unprotected(f"sl_validation: {exc}")
     except Exception as exc:
         logger.error("SL/TP placement failed %s %s: %s", side, symbol, exc)
-        try:
-            cancel_all_orders(symbol)
-        except Exception:
-            pass
-        _emergency_close(symbol, side, qty, position_side)
-        from db import update_signal_status
-
-        update_signal_status(signal_log_id, "error", f"SL/TP failed: {exc}")
-        return False, str(exc)
+        return _abort_unprotected(f"SL/TP failed: {exc}")
 
     margin = float(signal.get("margin_usdt") or 0)
     leverage = int(float(signal.get("leverage") or 0))
@@ -138,7 +145,6 @@ def _attach_protective(
             "entry_price": actual_entry,
             "sl_order_id": sl_order_id,
             "tp_order_id": tp_order_id,
-            "sl_widened_for_mark": sl_widened_for_mark,
             "notional_usdt": margin * leverage,
             "entry_type": entry_type,
             "entry_is_algo": entry_type == "STOP_LIMIT",

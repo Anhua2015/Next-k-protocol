@@ -80,6 +80,18 @@ def open_limit(
     try:
         limit_price_raw = float(signal_entry)
         limit_price = _round_price(limit_price_raw, tick_size)
+        if sl_price is not None and float(sl_price) > 0:
+            from trading.protective import validate_sl_distance
+
+            pre_sl = _round_price(float(sl_price), tick_size)
+            try:
+                validate_sl_distance(side, pre_sl, mark_px, tick_size)
+            except ValueError as exc:
+                msg = f"sl_preflight: {exc}"
+                logger.info("LIMIT reject %s %s: %s", side, symbol, msg)
+                update_signal_status(signal_log_id, "error", msg)
+                return LimitEntryResult(ok=False, error=msg)
+
         raw_qty = margin * leverage / limit_price
         qty = _round_quantity(raw_qty, step_size)
         if qty <= 0:

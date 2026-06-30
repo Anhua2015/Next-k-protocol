@@ -1,15 +1,13 @@
-"""Unit: session close uses MARKET even if close_price is present."""
+"""Unit: loss close uses MARKET even if close_price is present."""
 from __future__ import annotations
 
 import re
 import sys
 
-import pytest
-
 BASE = "https://testnet.binancefuture.com"
 
 
-def test_session_close_uses_market_order(seeded_config, httpx_mock, load_binance_fixture):
+def test_loss_close_uses_market_order(seeded_config, httpx_mock, load_binance_fixture):
     httpx_mock.add_response(
         method="GET",
         url=re.compile(rf"^{re.escape(BASE)}/fapi/v1/time(\?.*)?$"),
@@ -28,6 +26,13 @@ def test_session_close_uses_market_order(seeded_config, httpx_mock, load_binance
         method="GET",
         url=re.compile(rf"^{re.escape(BASE)}/fapi/v1/positionSide/dual(\?.*)?$"),
         json=load_binance_fixture("position_side_single"),
+        is_reusable=True,
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(rf"^{re.escape(BASE)}/fapi/v1/exchangeInfo(\?.*)?$"),
+        json=load_binance_fixture("exchange_info_btcusdt"),
         is_reusable=True,
         is_optional=True,
     )
@@ -61,7 +66,7 @@ def test_session_close_uses_market_order(seeded_config, httpx_mock, load_binance
     )
     seeded_config.insert_signal(
         source="orb",
-        api_signal_id="orb:close:BTCUSDT:session_close:1782158411621",
+        api_signal_id="orb:close:QQQUSDT:321:loss",
         symbol="BTCUSDT",
         side="LONG",
         entry_price=None,
@@ -70,10 +75,10 @@ def test_session_close_uses_market_order(seeded_config, httpx_mock, load_binance
         confidence="high",
         regime=None,
         notional_usdt=None,
-        received_at="2026-06-22T20:00:00+00:00",
+        received_at="2026-06-30T15:00:00+00:00",
         status="received",
         action="close",
-        payload_json='{"close_price": 105.79}',
+        payload_json='{"close_price": 730.38}',
     )
     signal_log_id = seeded_config.list_signals(limit=1)[0]["id"]
 
@@ -87,8 +92,8 @@ def test_session_close_uses_market_order(seeded_config, httpx_mock, load_binance
             "side": "LONG",
             "source": "orb",
             "action": "close",
-            "close_price": 105.79,
-            "api_signal_id": "orb:close:BTCUSDT:session_close:1782158411621",
+            "close_price": 730.38,
+            "api_signal_id": "orb:close:QQQUSDT:321:loss",
         }
     )
 
@@ -99,6 +104,6 @@ def test_session_close_uses_market_order(seeded_config, httpx_mock, load_binance
         if req.method == "POST" and "/fapi/v1/order" in str(req.url)
     ]
     assert len(market_calls) == 1
-    assert "type=MARKET" in str(market_calls[0].url) or "type=MARKET" in (market_calls[0].content or b"").decode(
-        "utf-8", errors="ignore"
-    )
+    url = str(market_calls[0].url)
+    assert "type=MARKET" in url
+    assert "price=" not in url

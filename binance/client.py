@@ -105,6 +105,7 @@ class BinanceClient:
         as_text: bool = False,
     ) -> Any:
         params = dict(params or {})
+        signed_params = signed
         if signed:
             params["timestamp"] = self._ts()
             params["recvWindow"] = RECV_WINDOW_MS
@@ -112,6 +113,16 @@ class BinanceClient:
 
         url = self._base_url() + path
         hdrs = self._headers()
+
+        def _refresh_signed() -> None:
+            nonlocal params
+            if not signed_params:
+                return
+            inner = {k: v for k, v in params.items() if k != "signature"}
+            self._sync_server_time()
+            inner["timestamp"] = self._ts()
+            inner["signature"] = self._sign(inner)
+            params = inner
 
         last_exc: Optional[Exception] = None
         for attempt in range(MAX_RETRIES + 1):
@@ -165,13 +176,20 @@ class BinanceClient:
                             time.sleep(delay)
                             continue
                         raise last_exc
-                    if isinstance(body, dict) and body.get("code") == -1021 and attempt == 0:
-                        self._sync_server_time()
-                        inner = {k: v for k, v in params.items() if k != "signature"}
-                        inner["timestamp"] = self._ts()
-                        inner["signature"] = self._sign(inner)
-                        params = inner
-                        continue
+                    if isinstance(body, dict) and body.get("code") == -1021:
+                        last_exc = httpx.HTTPStatusError(
+                            f"{resp.status_code} code=-1021",
+                            request=resp.request,
+                            response=resp,
+                        )
+                        if attempt < MAX_RETRIES:
+                            logger.warning(
+                                "recvWindow/timestamp retry %d/%d after sync",
+                                attempt + 1, MAX_RETRIES,
+                            )
+                            _refresh_signed()
+                            continue
+                        raise last_exc
                     if resp.status_code in (401, 403) and signed:
                         self._notify_auth_fail(f"{method} {path}")
                         raise BinanceAuthError(
@@ -193,6 +211,7 @@ class BinanceClient:
                         attempt + 1, MAX_RETRIES, delay, exc,
                     )
                     time.sleep(delay)
+                    _refresh_signed()
                     continue
                 raise
         if last_exc:
