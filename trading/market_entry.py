@@ -41,11 +41,11 @@ def open_market(
     from trader import (
         _emergency_close,
         _place_protective,
-        _validate_sl_distance,
         cancel_all_orders,
         get_order,
         place_order,
     )
+    from trading.protective import place_sl_with_mark_retries
 
     signal_log_id = signal["signal_log_id"]
     order_side = "BUY" if side == "LONG" else "SELL"
@@ -102,21 +102,33 @@ def open_market(
     final_sl_p = _round_price(sl_price, tick_size) if sl_price else None
     final_tp_p = _round_price(tp_price, tick_size) if tp_price else None
 
-    if final_sl_p is not None:
-        try:
-            _validate_sl_distance(side, final_sl_p, mark_px, tick_size)
-        except ValueError as exc:
-            logger.warning("SL validation failed %s: %s", symbol, exc)
-
+    sl_widened_for_mark = False
     sl_order_id = ""
     tp_order_id = ""
     try:
         if final_sl_p is not None:
-            sl_resp = _place_protective(symbol, close_side, final_sl_p, qty, position_side, tick_size, "SL")
+            final_sl_p, sl_widened_for_mark, sl_resp = place_sl_with_mark_retries(
+                place_fn=lambda sl_px: _place_protective(
+                    symbol, close_side, sl_px, qty, position_side, tick_size, "SL",
+                ),
+                side=side,
+                sl_price=final_sl_p,
+                mark_px=mark_px,
+                tick=tick_size,
+            )
             sl_order_id = str(sl_resp.get("algoId", "") or sl_resp.get("orderId", ""))
         if final_tp_p is not None:
             tp_resp = _place_protective(symbol, close_side, final_tp_p, qty, position_side, tick_size, "TP")
             tp_order_id = str(tp_resp.get("algoId", "") or tp_resp.get("orderId", ""))
+    except ValueError as exc:
+        logger.error("SL unfixable %s %s: %s", side, symbol, exc)
+        try:
+            cancel_all_orders(symbol)
+        except Exception:
+            pass
+        _emergency_close(symbol, side, qty, position_side)
+        update_signal_status(signal_log_id, "error", f"sl_validation: {exc}")
+        return MarketEntryResult(ok=False, error=str(exc))
     except Exception as exc:
         logger.error("SL/TP placement failed %s %s: %s", side, symbol, exc)
         try:
@@ -137,6 +149,7 @@ def open_market(
             "entry_price": actual_entry,
             "sl_order_id": sl_order_id,
             "tp_order_id": tp_order_id,
+            "sl_widened_for_mark": sl_widened_for_mark,
             "notional_usdt": margin * leverage,
         },
     )
