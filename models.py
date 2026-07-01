@@ -146,6 +146,19 @@ class CancelPendingEntriesResult(BaseModel):
     cancelled: int = Field(0, description="成功撤销的 pending 入场单数")
 
 
+class UpdateProtectiveSlRequest(BaseModel):
+    source: str = Field("orb", description="信号来源（日志用）")
+    symbol: str = Field(..., description="交易对")
+    side: str = Field(..., description="持仓方向 LONG / SHORT")
+    sl_price: float = Field(..., gt=0, description="新的止损触发价")
+
+
+class UpdateProtectiveSlResult(BaseModel):
+    ok: bool = True
+    sl_price: Optional[float] = Field(None, description="实际挂出的止损价")
+    algo_id: Optional[str] = Field(None, description="新止损 algo 单 ID")
+
+
 class LivePositionOut(BaseModel):
     """币安实时持仓视图。"""
 

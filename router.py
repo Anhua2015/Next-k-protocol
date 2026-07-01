@@ -28,6 +28,8 @@ from models import (
     SignalLogOut,
     StatusOut,
     TradFiSignOut,
+    UpdateProtectiveSlRequest,
+    UpdateProtectiveSlResult,
 )
 
 logger = logging.getLogger("router")
@@ -281,6 +283,29 @@ async def cancel_pending_entries(body: CancelPendingEntriesRequest):
             body.reason,
         )
     return {"ok": True, "cancelled": int(cancelled or 0)}
+
+
+@router.post(
+    "/maintenance/update-protective-sl",
+    response_model=UpdateProtectiveSlResult,
+    summary="更新持仓保护止损（撤旧挂新）",
+)
+async def update_protective_sl(body: UpdateProtectiveSlRequest):
+    from trader import update_live_protective_sl
+
+    result = update_live_protective_sl(
+        body.symbol,
+        str(body.side).upper(),
+        float(body.sl_price),
+        source=str(body.source or "orb"),
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "update_sl_failed")
+    return UpdateProtectiveSlResult(
+        ok=True,
+        sl_price=result.get("sl_price"),
+        algo_id=result.get("algo_id"),
+    )
 
 
 # ---------------------------------------------------------------------------

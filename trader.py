@@ -740,3 +740,78 @@ def execute_trade_with_status(signal: Dict[str, Any]) -> str:
         step_size, tick_size, min_notional, hedge, mark_px, source, play,
     )
     return "traded" if result.ok else "error"
+
+
+def update_live_protective_sl(
+    symbol: str,
+    side: str,
+    sl_price: float,
+    *,
+    source: str = "orb",
+) -> Dict[str, Any]:
+    """Cancel open SL algos and place a new protective stop for an existing position."""
+    from trading.protective import place_sl_with_mark_retries
+
+    symbol = str(symbol).strip().upper()
+    side = str(side).upper()
+    if side not in ("LONG", "SHORT"):
+        return {"ok": False, "error": "invalid_side"}
+
+    live_pos = get_live_position(symbol)
+    if not live_pos:
+        return {"ok": False, "error": "no_position"}
+
+    amt = float(live_pos.get("positionAmt") or 0)
+    if amt == 0:
+        return {"ok": False, "error": "flat_position"}
+
+    actual_side = "LONG" if amt > 0 else "SHORT"
+    if actual_side != side:
+        return {"ok": False, "error": f"side_mismatch:{side}->{actual_side}"}
+
+    qty = abs(amt)
+    close_side = "SELL" if side == "LONG" else "BUY"
+    hedge = _detect_hedge_mode()
+    position_side = side if hedge else None
+
+    try:
+        _, _, _, tick_size, _ = _get_filters(symbol)
+        mark_px = get_mark_price(symbol)
+    except Exception as exc:
+        logger.error("update_live_protective_sl setup %s failed: %s", symbol, exc)
+        return {"ok": False, "error": f"setup:{exc}"}
+
+    _cancel_open_protective_orders(
+        symbol,
+        kind="SL",
+        close_side=close_side,
+        position_side=position_side,
+        actual_side=side,
+        reference_price=float(sl_price),
+    )
+
+    def place_fn(px: float):
+        return _place_protective(symbol, close_side, px, qty, position_side, tick_size, "SL")
+
+    try:
+        sl_final, _, resp = place_sl_with_mark_retries(
+            place_fn=place_fn,
+            side=side,
+            sl_price=float(sl_price),
+            mark_px=mark_px,
+            tick=tick_size,
+        )
+    except Exception as exc:
+        logger.error("update_live_protective_sl place %s failed: %s", symbol, exc)
+        return {"ok": False, "error": f"place:{exc}"}
+
+    algo_id = str(resp.get("algoId") or resp.get("orderId") or "") or None
+    logger.info(
+        "update_live_protective_sl symbol=%s side=%s source=%s sl=%s algo_id=%s",
+        symbol,
+        side,
+        source,
+        sl_final,
+        algo_id or "-",
+    )
+    return {"ok": True, "sl_price": float(sl_final), "algo_id": algo_id}
