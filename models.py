@@ -58,7 +58,7 @@ class SignalItem(BaseModel):
     )
     entry_type: Optional[str] = Field(
         "MARKET",
-        description="入场方式：MARKET | STOP_LIMIT | stoplimit_gap（ORB 推荐）",
+        description="入场方式：MARKET | LIMIT（FVG prox）| STOP_LIMIT | stoplimit_gap",
     )
     sl_price: Optional[float] = Field(
         None,
@@ -67,6 +67,18 @@ class SignalItem(BaseModel):
     tp_price: Optional[float] = Field(
         None,
         description="止盈价格，由 next-k-api 计算后推送。Protocol 不做二次计算",
+    )
+    or_high: Optional[float] = Field(
+        None,
+        description="Preplace OR 高点；or_range SL 锚定用",
+    )
+    or_low: Optional[float] = Field(
+        None,
+        description="Preplace OR 低点；or_range SL 锚定用",
+    )
+    sl_risk_dist: Optional[float] = Field(
+        None,
+        description="STOP 触发价与 SL 的距离；fill 后平移 SL（atr 模式）",
     )
     close_price: Optional[float] = Field(
         None,
@@ -120,6 +132,31 @@ class SignalIngestResult(BaseModel):
         default_factory=list,
         description="每条信号的处理详情",
     )
+    oco_rollback: int = Field(0, description="OCO 不完整时撤销的 pending 腿数")
+
+
+class CancelPendingEntriesRequest(BaseModel):
+    source: str = Field("orb", description="信号来源")
+    api_signal_ids: List[str] = Field(..., min_length=1, max_length=50)
+    reason: str = Field("entry_deadline_expired", description="撤单原因写入 skip_reason")
+
+
+class CancelPendingEntriesResult(BaseModel):
+    ok: bool = True
+    cancelled: int = Field(0, description="成功撤销的 pending 入场单数")
+
+
+class UpdateProtectiveSlRequest(BaseModel):
+    source: str = Field("orb", description="信号来源（日志用）")
+    symbol: str = Field(..., description="交易对")
+    side: str = Field(..., description="持仓方向 LONG / SHORT")
+    sl_price: float = Field(..., gt=0, description="新的止损触发价")
+
+
+class UpdateProtectiveSlResult(BaseModel):
+    ok: bool = True
+    sl_price: Optional[float] = Field(None, description="实际挂出的止损价")
+    algo_id: Optional[str] = Field(None, description="新止损 algo 单 ID")
 
 
 class LivePositionOut(BaseModel):

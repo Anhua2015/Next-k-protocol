@@ -21,12 +21,15 @@ from fastapi import APIRouter, HTTPException, Query
 import db as _db
 from models import (
     AccountSummaryOut,
+    CancelPendingEntriesRequest,
     LivePositionOut,
     SignalIngestRequest,
     SignalIngestResult,
     SignalLogOut,
     StatusOut,
     TradFiSignOut,
+    UpdateProtectiveSlRequest,
+    UpdateProtectiveSlResult,
 )
 
 logger = logging.getLogger("router")
@@ -256,7 +259,7 @@ async def lookup_signal(
 
 @router.post(
     "/maintenance/reconcile-entries",
-    summary="对账 pending STOP 入场单",
+    summary="对账 pending STOP/LIMIT 入场单",
 )
 async def reconcile_entries():
     from trading.entry_reconcile import reconcile_pending_entry_orders
@@ -264,6 +267,45 @@ async def reconcile_entries():
     with _db._db_write_lock:
         promoted = reconcile_pending_entry_orders()
     return {"ok": True, "promoted": int(promoted or 0)}
+
+
+@router.post(
+    "/maintenance/cancel-pending-entries",
+    summary="撤销 pending STOP 入场单",
+)
+async def cancel_pending_entries(body: CancelPendingEntriesRequest):
+    from trading.entry_cancel import cancel_pending_entries_by_api_ids
+
+    with _db._db_write_lock:
+        cancelled = cancel_pending_entries_by_api_ids(
+            body.source,
+            body.api_signal_ids,
+            body.reason,
+        )
+    return {"ok": True, "cancelled": int(cancelled or 0)}
+
+
+@router.post(
+    "/maintenance/update-protective-sl",
+    response_model=UpdateProtectiveSlResult,
+    summary="更新持仓保护止损（撤旧挂新）",
+)
+async def update_protective_sl(body: UpdateProtectiveSlRequest):
+    from trader import update_live_protective_sl
+
+    result = update_live_protective_sl(
+        body.symbol,
+        str(body.side).upper(),
+        float(body.sl_price),
+        source=str(body.source or "orb"),
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "update_sl_failed")
+    return UpdateProtectiveSlResult(
+        ok=True,
+        sl_price=result.get("sl_price"),
+        algo_id=result.get("algo_id"),
+    )
 
 
 # ---------------------------------------------------------------------------

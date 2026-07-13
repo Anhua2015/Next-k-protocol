@@ -131,6 +131,17 @@ if [[ $WAIT_COUNT -ge $WAIT_MAX ]]; then
     warn "API 未在 ${WAIT_MAX}s 内响应，可能仍在加载中。请检查：$LOG_FILE"
 fi
 
+# 可选：同机启动 KK vnpy（固定 IP 上一键拉起）
+if [[ "${KK_VNPY_AUTO_START:-1}" == "1" ]]; then
+    NEXT_K_API_DIR="${NEXT_K_API_DIR:-$(dirname "$SCRIPT_DIR")/next-k-api}"
+    if [[ -x "$NEXT_K_API_DIR/start_kk_vnpy.sh" ]]; then
+        info "启动 KK vnpy runner（$NEXT_K_API_DIR）..."
+        (cd "$NEXT_K_API_DIR" && ./start_kk_vnpy.sh) || warn "kk_vnpy 启动失败，请手动执行 start_kk_vnpy.sh"
+    else
+        warn "未找到 $NEXT_K_API_DIR/start_kk_vnpy.sh，跳过 KK 自动启动"
+    fi
+fi
+
 echo ""
 echo -e "${GREEN}══════════════════════════════════════════${NC}"
 echo -e "${GREEN}  Next K Protocol 启动成功${NC}"

@@ -25,6 +25,34 @@ def _immediate_trigger_error(exc: Exception) -> bool:
     return "-2021" in msg or "immediately trigger" in msg
 
 
+def _effective_sl_for_fill(
+    signal: Dict[str, Any],
+    *,
+    side: str,
+    actual_entry: float,
+) -> Optional[float]:
+    """fill 价与 STOP 触发价不一致时平移 SL（or_range 保持 OR 锚定 SL）。"""
+    sl_raw = signal.get("sl_price")
+    if sl_raw is None:
+        return None
+    sl_f = float(sl_raw)
+    sig_entry = signal.get("entry_price")
+    if sig_entry is None or float(sig_entry) <= 0:
+        return sl_f
+    sig_e = float(sig_entry)
+    if abs(actual_entry - sig_e) < 1e-12:
+        return sl_f
+    or_h = signal.get("or_high")
+    or_l = signal.get("or_low")
+    if or_h is not None and or_l is not None and float(or_h) > float(or_l):
+        return sl_f
+    dist = signal.get("sl_risk_dist")
+    if dist is not None and float(dist) > 0:
+        d = float(dist)
+        return actual_entry - d if side == "LONG" else actual_entry + d
+    return sl_f + (actual_entry - sig_e)
+
+
 def _attach_protective(
     signal: Dict[str, Any],
     *,
@@ -37,16 +65,34 @@ def _attach_protective(
     position_side: Optional[str],
     source: str,
     play: str,
+    entry_type: str = "STOP_LIMIT",
 ) -> tuple[bool, str]:
     from binance.exchange_info import round_price as _round_price
-    from db import update_signal_execution
-    from trader import _emergency_close, _place_protective, _validate_sl_distance, cancel_all_orders
+    from db import update_signal_execution, update_signal_status
+    from trader import _place_protective, cancel_all_orders, get_mark_price
+    from trading.protective import place_sl_strict
+    from common.exceptions import EmergencyCloseFailedError
+
+    def _abort_unprotected(reason: str) -> tuple[bool, str]:
+        try:
+            cancel_all_orders(symbol)
+        except Exception:
+            pass
+        try:
+            from trader import emergency_close_position
+            emergency_close_position(symbol, side, qty, position_side)
+        except EmergencyCloseFailedError:
+            update_signal_status(signal_log_id, "error", f"{reason}; emergency_close_failed")
+            logger.critical("NAKED POSITION %s %s qty=%s — %s", side, symbol, qty, reason)
+            return False, f"{reason}; emergency_close_failed"
+        update_signal_status(signal_log_id, "error", reason)
+        return False, reason
 
     signal_log_id = signal["signal_log_id"]
     sl_price = None
     tp_price = None
     try:
-        sl_price = float(signal["sl_price"]) if signal.get("sl_price") is not None else None
+        sl_price = _effective_sl_for_fill(signal, side=side, actual_entry=float(actual_entry))
         tp_price = float(signal["tp_price"]) if signal.get("tp_price") is not None else None
     except (TypeError, ValueError):
         pass
@@ -55,36 +101,37 @@ def _attach_protective(
     final_sl_p = _round_price(sl_price, tick_size) if sl_price else None
     final_tp_p = _round_price(tp_price, tick_size) if tp_price else None
 
-    if final_sl_p is not None:
-        try:
-            _validate_sl_distance(side, final_sl_p, mark_px, tick_size)
-        except ValueError as exc:
-            logger.error("SL validation failed %s: abort entry — %s", symbol, exc)
-            from db import update_signal_status
+    if final_sl_p is None:
+        return _abort_unprotected("missing_sl")
 
-            update_signal_status(signal_log_id, "error", f"sl_validation: {exc}")
-            return False, str(exc)
+    try:
+        mark_px = get_mark_price(symbol)
+    except Exception as exc:
+        logger.warning("mark refresh before SL %s: %s", symbol, exc)
 
     sl_order_id = ""
     tp_order_id = ""
     try:
-        if final_sl_p is not None:
-            sl_resp = _place_protective(symbol, close_side, final_sl_p, qty, position_side, tick_size, "SL")
-            sl_order_id = str(sl_resp.get("algoId", "") or sl_resp.get("orderId", ""))
+        final_sl_p, sl_resp = place_sl_strict(
+            place_fn=lambda sl_px: _place_protective(
+                symbol, close_side, sl_px, qty, position_side, tick_size, "SL",
+            ),
+            side=side,
+            sl_price=final_sl_p,
+            mark_px=mark_px,
+            tick=tick_size,
+            mark_px_fn=lambda: get_mark_price(symbol),
+        )
+        sl_order_id = str(sl_resp.get("algoId", "") or sl_resp.get("orderId", ""))
         if final_tp_p is not None:
             tp_resp = _place_protective(symbol, close_side, final_tp_p, qty, position_side, tick_size, "TP")
             tp_order_id = str(tp_resp.get("algoId", "") or tp_resp.get("orderId", ""))
+    except ValueError as exc:
+        logger.error("SL invalid %s %s — emergency close: %s", side, symbol, exc)
+        return _abort_unprotected(f"sl_validation: {exc}")
     except Exception as exc:
         logger.error("SL/TP placement failed %s %s: %s", side, symbol, exc)
-        try:
-            cancel_all_orders(symbol)
-        except Exception:
-            pass
-        _emergency_close(symbol, side, qty, position_side)
-        from db import update_signal_status
-
-        update_signal_status(signal_log_id, "error", f"SL/TP failed: {exc}")
-        return False, str(exc)
+        return _abort_unprotected(f"SL/TP failed: {exc}")
 
     margin = float(signal.get("margin_usdt") or 0)
     leverage = int(float(signal.get("leverage") or 0))
@@ -99,12 +146,13 @@ def _attach_protective(
             "sl_order_id": sl_order_id,
             "tp_order_id": tp_order_id,
             "notional_usdt": margin * leverage,
-            "entry_type": "STOP_LIMIT",
+            "entry_type": entry_type,
+            "entry_is_algo": entry_type == "STOP_LIMIT",
         },
     )
     from observability.metrics import TRADES_OPENED
 
-    TRADES_OPENED.labels(source=source, side=side, entry_type="STOP_LIMIT").inc()
+    TRADES_OPENED.labels(source=source, side=side, entry_type=entry_type).inc()
     sl_log = f"{final_sl_p:.6f}" if final_sl_p is not None else "-"
     tp_log = f"{final_tp_p:.6f}" if final_tp_p is not None else "-"
     logger.info(
@@ -131,7 +179,8 @@ def open_stop_limit(
     """挂 OR Stop-Limit；已穿越 entry 时 fallback MARKET（gap 穿越）。"""
     from binance.exchange_info import round_price as _round_price, round_quantity as _round_quantity
     from db import update_signal_execution, update_signal_status
-    from trader import get_order, place_order
+    from binance.orders import build_entry_stop_limit_algo_params, normalize_algo_entry_order
+    from trader import get_algo_order, place_algo_order
 
     signal_log_id = signal["signal_log_id"]
     order_side = "BUY" if side == "LONG" else "SELL"
@@ -189,27 +238,24 @@ def open_stop_limit(
         if qty * stop_px < min_notional:
             raise ValueError(f"notional {qty * stop_px:.2f} < min {min_notional}")
 
-        entry_params: Dict[str, Any] = {
-            "symbol": symbol,
-            "side": order_side,
-            "type": "STOP",
-            "timeInForce": "GTC",
-            "quantity": qty,
-            "price": limit_px,
-            "stopPrice": stop_px,
-            "newOrderRespType": "RESULT",
-        }
-        if position_side:
-            entry_params["positionSide"] = position_side
-        entry_resp = place_order(entry_params)
-        entry_order_id = str(entry_resp.get("orderId", ""))
-        status = str(entry_resp.get("status") or "").upper()
-        actual_entry = float(entry_resp.get("avgPrice") or 0)
-        exec_qty = float(entry_resp.get("executedQty") or 0)
+        entry_params = build_entry_stop_limit_algo_params(
+            symbol=symbol,
+            side=order_side,
+            qty=qty,
+            trigger_price=stop_px,
+            limit_price=limit_px,
+            position_side=position_side,
+        )
+        entry_resp = place_algo_order(entry_params)
+        entry_order_id = str(entry_resp.get("algoId") or entry_resp.get("orderId") or "")
+        normalized = normalize_algo_entry_order(entry_resp)
+        status = str(normalized.get("status") or "").upper()
+        actual_entry = float(normalized.get("avgPrice") or 0)
+        exec_qty = float(normalized.get("executedQty") or 0)
 
         if status == "FILLED" or (exec_qty > 0 and actual_entry > 0):
-            if actual_entry <= 0 and entry_order_id:
-                detail = get_order(symbol, entry_order_id)
+            if (actual_entry <= 0 or exec_qty <= 0) and entry_order_id:
+                detail = normalize_algo_entry_order(get_algo_order(entry_order_id))
                 actual_entry = float(detail.get("avgPrice") or stop_px)
                 exec_qty = float(detail.get("executedQty") or qty)
             signal["_entry_order_id"] = entry_order_id
@@ -246,6 +292,7 @@ def open_stop_limit(
                 "entry_price": stop_px,
                 "limit_price": limit_px,
                 "entry_type": "STOP_LIMIT",
+                "entry_is_algo": True,
                 "stop_price": stop_px,
                 "notional_usdt": margin * leverage,
                 "margin_usdt": margin,
@@ -253,6 +300,9 @@ def open_stop_limit(
                 "side": side,
                 "sl_price": signal.get("sl_price"),
                 "tp_price": signal.get("tp_price"),
+                "or_high": signal.get("or_high"),
+                "or_low": signal.get("or_low"),
+                "sl_risk_dist": signal.get("sl_risk_dist"),
                 "oco_peer_api_id": signal.get("oco_peer_api_id") or "",
             },
         )
@@ -323,8 +373,12 @@ def finalize_filled_entry(
     position_side = side if hedge else None
     signal = {
         "signal_log_id": signal_log_id,
+        "entry_price": result.get("entry_price") or signal_row.get("entry_price"),
         "sl_price": result.get("sl_price") or signal_row.get("sl_price"),
         "tp_price": result.get("tp_price") or signal_row.get("tp_price"),
+        "or_high": result.get("or_high"),
+        "or_low": result.get("or_low"),
+        "sl_risk_dist": result.get("sl_risk_dist"),
         "margin_usdt": float(result.get("margin_usdt") or 0),
         "leverage": int(float(result.get("leverage") or 1)),
         "_entry_order_id": str(order.get("orderId") or result.get("entry_order_id") or ""),
@@ -340,5 +394,6 @@ def finalize_filled_entry(
         position_side=position_side,
         source=source,
         play=str(signal_row.get("play") or ""),
+        entry_type=str(result.get("entry_type") or "STOP_LIMIT").upper(),
     )
     return ok

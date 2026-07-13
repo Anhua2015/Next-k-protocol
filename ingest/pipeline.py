@@ -39,6 +39,13 @@ def process_signal_batch(signals, db_module) -> SignalIngestResult:
             result["skipped"] += 1
         result["details"].append(detail)
 
+    from ingest.oco_rollback import rollback_incomplete_oco_batch
+
+    rolled = rollback_incomplete_oco_batch(signals, result["details"], db_module)
+    if rolled:
+        logger.info("oco rollback cancelled=%d pending legs", rolled)
+        result["oco_rollback"] = rolled
+
     if result["scanned"]:
         logger.info("ingest complete: scanned=%d traded=%d skipped=%d errors=%d",
                     result["scanned"], result["traded"], result["skipped"], result["errors"])

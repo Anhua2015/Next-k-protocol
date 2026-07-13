@@ -4,7 +4,7 @@ Binance Futures live trading module. Supports ZCT VWAP / Momentum / Jiezhen thre
 
 ## Key Behaviours
 
-- SL/TP placed via `/fapi/v1/algoOrder` (Binance migration 2025-12-09).
+- SL/TP and STOP_LIMIT entry orders placed via `/fapi/v1/algoOrder` (Binance migration 2025-12-09; `-4120` if using legacy `/fapi/v1/order` for STOP).
 - HEDGE-mode aware: uses `positionSide` when account is dual-side.
 - SL distance pre-validated against mark price.
 - On SL/TP placement failure -> emergency MARKET close to avoid naked position.
