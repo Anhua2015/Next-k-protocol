@@ -52,7 +52,9 @@ export const FLEET_DEFAULTS = {
   MIN_KEEP_SCORE: 12,
   HOT_SWAP_MIN_GAP: 10,
   ROTATE_COOLDOWN_MS: 2 * 60 * 60 * 1000,
-  TREND_LINKED_MODE: false,
+  /** Agent 趋势联动：long/short/neutral/flat（默认开，GRID_AGENT_TREND=0 可关） */
+  TREND_LINKED_MODE: (process.env.GRID_AGENT_TREND ?? '1') !== '0'
+    && !['false', 'no', 'off'].includes(String(process.env.GRID_AGENT_TREND ?? '1').toLowerCase()),
   BLUE_CHIP_BONUS: 12,
 };
 
@@ -131,7 +133,7 @@ export function buildPlanFromSelection({ balance, markets, sel }) {
   let mode = 'neutral';
   if (FLEET_DEFAULTS.TREND_LINKED_MODE && sel.analysis?.recommended) {
     const r = sel.analysis.recommended;
-    if (r === 'long' || r === 'short') mode = r;
+    if (r === 'long' || r === 'short' || r === 'neutral' || r === 'flat') mode = r;
   }
 
   return {
@@ -263,9 +265,14 @@ export async function restartFleet(fleet, exchange, { closeFirst = true } = {}) 
       await bot.stop({ closePosition: false });
       await cancelMarketOrdersFully(exchange, p.marketId);
     }
+    if (p.mode === 'flat') {
+      started.push({ name: p.name, openOrders: 0, mode: 'flat', skipped: true });
+      console.log(`[Fleet] ${p.name} Agent=flat，跳过挂单（空仓）`);
+      continue;
+    }
     try {
       const st = await fleet.start(planToBotConfig(p));
-      started.push({ name: p.name, openOrders: st.openOrders, score: p.score, perRung: p.perRungUsd, margin: p.estMarginUsd });
+      started.push({ name: p.name, openOrders: st.openOrders, score: p.score, mode: p.mode, perRung: p.perRungUsd, margin: p.estMarginUsd });
     } catch (e) {
       started.push({ name: p.name, error: e.message });
     }

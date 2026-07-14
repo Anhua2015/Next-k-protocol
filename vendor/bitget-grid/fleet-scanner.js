@@ -27,10 +27,16 @@ export async function scoreCandidates(exchange, { names = CANDIDATE_NAMES, cache
     let rangeHalfPct = unifiedRangeHalfPct();
 
     try {
-      const candles = await exchange.getCandles(m.marketId, 900, 96);
-      if (candles?.length >= 30) {
-        analysis = analyzeTrend(candles);
-        if (FLEET_DEFAULTS.TREND_LINKED_MODE) {
+      // Agent 决策用 4H；未开 Agent 仍用 15m
+      const intervalSec = FLEET_DEFAULTS.TREND_LINKED_MODE ? 14400 : 900;
+      const need = FLEET_DEFAULTS.TREND_LINKED_MODE ? 80 : 30;
+      let funding = 0;
+      try { funding = await exchange.getFundingRate?.(m.marketId) ?? 0; } catch { /* */ }
+      const candles = await exchange.getCandles(m.marketId, intervalSec, Math.max(need, 96));
+      if (candles?.length >= need) {
+        analysis = analyzeTrend(candles, funding);
+        if (analysis.recommended === 'flat') score += 5;
+        else if (FLEET_DEFAULTS.TREND_LINKED_MODE) {
           if (analysis.recommended === 'neutral') score += 35;
           else score += 22 + (analysis.strength || 0) * 12;
         } else if (analysis.recommended === 'neutral') score += 35;
@@ -39,7 +45,7 @@ export async function scoreCandidates(exchange, { names = CANDIDATE_NAMES, cache
         if (atr >= 0.35 && atr <= 4) score += 28 - Math.abs(atr - 1.25) * 6;
         else score += 8;
       }
-    } catch { /* ç”¨é»˜è®¤åˆ† */ }
+    } catch { /* 用默认分 */ }
 
     const gp = gridParamsForName(name);
     const bonus = FLEET_DEFAULTS.BLUE_CHIP_BONUS ?? 12;

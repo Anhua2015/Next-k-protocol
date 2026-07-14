@@ -1,26 +1,24 @@
-// Trend detection + strategy recommendation from OHLCV candles.
+// Trend detection — default uses hackathon Agent rules (ADX/RSI/funding → modes incl. flat).
+import { analyzeAgentTrend, agentTrendEnabled } from './agent-trend.js';
 import { ema, atr, normalizedSlope } from './indicators.js';
 
 /**
  * Analyse candles and recommend a grid strategy.
- * candles: chronological [{time, open, high, low, close, volume}]
- *
- * Logic: combine an EMA(fast) vs EMA(slow) regime filter with a linear-
- * regression slope confirmation. Volatility (ATR%) is reported so the UI can
- * suggest sensible grid spacing.
- *
- * Returns:
- *  trend:        'up' | 'down' | 'range'
- *  recommended:  'long' | 'short' | 'neutral'
- *  strength:     0..1 confidence
- *  atrPct:       ATR as % of price (volatility gauge)
- *  detail:       human-readable explanation (Chinese)
+ * When GRID_AGENT_TREND=1 (default): Agent ADX/RSI/funding rules.
+ * When off: legacy EMA/slope only (no flat).
  */
-export function analyzeTrend(candles, opts = {}) {
+export function analyzeTrend(candles, fundingOrOpts = 0, opts = {}) {
+  if (agentTrendEnabled()) {
+    const funding = typeof fundingOrOpts === 'number' ? fundingOrOpts : (fundingOrOpts?.funding8h ?? 0);
+    return analyzeAgentTrend(candles, funding, opts.cfg);
+  }
+  return analyzeTrendLegacy(candles, typeof fundingOrOpts === 'object' ? fundingOrOpts : opts);
+}
+
+function analyzeTrendLegacy(candles, opts = {}) {
   const fast = opts.fast ?? 20;
   const slow = opts.slow ?? 50;
   const slopeBars = opts.slopeBars ?? 20;
-  // Slope above this (fraction/bar) counts as a real trend, not noise.
   const slopeThreshold = opts.slopeThreshold ?? 0.0015;
 
   const closes = candles.map((c) => c.close).filter((v) => Number.isFinite(v));
@@ -36,44 +34,30 @@ export function analyzeTrend(candles, opts = {}) {
 
   const emaFast = ema(closes, fast);
   const emaSlow = ema(closes, slow);
-  const slope = normalizedSlope(closes, slopeBars); // fraction per bar
+  const slope = normalizedSlope(closes, slopeBars);
   const a = atr(candles, 14);
   const atrPct = a && price ? (a / price) * 100 : null;
 
-  const emaGapPct = ((emaFast - emaSlow) / emaSlow) * 100;
   const up = emaFast > emaSlow && slope > slopeThreshold;
   const down = emaFast < emaSlow && slope < -slopeThreshold;
 
-  // Strength: blend of slope magnitude and EMA separation, clamped to 0..1.
   const strength = Math.min(
     1,
     (Math.abs(slope) / (slopeThreshold * 4)) * 0.6 +
-      (Math.abs(emaGapPct) / 3) * 0.4
+      (Math.abs(emaFast - emaSlow) / emaSlow / 0.02) * 0.4
   );
 
   let trend, recommended, detail;
   if (up) {
     trend = 'up'; recommended = 'long';
-    detail = `上升趋势：EMA${fast} 在 EMA${slow} 之上（差 ${emaGapPct.toFixed(2)}%），斜率 +${(slope * 100).toFixed(3)}%/根。推荐做多网格（低买、上涨分批止盈）。`;
+    detail = 'EMA 多头 + 斜率为正，倾向做多网格。';
   } else if (down) {
     trend = 'down'; recommended = 'short';
-    detail = `下降趋势：EMA${fast} 在 EMA${slow} 之下（差 ${emaGapPct.toFixed(2)}%），斜率 ${(slope * 100).toFixed(3)}%/根。推荐做空网格（高空、下跌分批止盈）。`;
+    detail = 'EMA 空头 + 斜率为负，倾向做空网格。';
   } else {
     trend = 'range'; recommended = 'neutral';
-    detail = `震荡/无明显趋势：EMA 差 ${emaGapPct.toFixed(2)}%，斜率 ${(slope * 100).toFixed(3)}%/根。推荐中性网格（区间内双向吃波动）。`;
+    detail = '震荡市，中性网格。';
   }
 
-  const volNote = atrPct != null
-    ? ` 波动率 ATR≈${atrPct.toFixed(2)}%，建议单格间距不小于该值的一半以覆盖手续费。`
-    : '';
-
-  return {
-    trend, recommended,
-    strength: Number(strength.toFixed(2)),
-    atrPct: atrPct != null ? Number(atrPct.toFixed(3)) : null,
-    price,
-    emaFast, emaSlow,
-    slopePct: Number((slope * 100).toFixed(4)),
-    detail: detail + volNote,
-  };
+  return { trend, recommended, strength, atrPct, price, detail };
 }

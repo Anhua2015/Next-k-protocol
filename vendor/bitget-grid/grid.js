@@ -42,6 +42,7 @@ export function isReduceOnly(side, mode) {
  * @returns {{levelIndex:number, price:number, side:'buy'|'sell', reduceOnly:boolean}[]}
  */
 export function seedOrders({ levels, price, mode, skipBand = 0.25, spacing }) {
+  if (mode === 'flat') return [];
   const band = (spacing ?? gridSpacing(levels)) * skipBand;
   const orders = [];
   for (let i = 0; i < levels.length; i++) {

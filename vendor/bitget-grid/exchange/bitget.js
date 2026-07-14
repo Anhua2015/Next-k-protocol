@@ -385,6 +385,29 @@ export class BitgetExchange extends EventEmitter {
     return this._prices.get(mId) ?? m.lastPrice;
   }
 
+  async getFundingRate(marketId) {
+    const m = this._market(marketId);
+    try {
+      const data = await this._publicGet('/api/v2/mix/market/current-fund-rate', {
+        symbol: m.symbol,
+        productType: PRODUCT,
+      });
+      const row = Array.isArray(data) ? data[0] : data;
+      return Number(row?.fundingRate ?? 0) || 0;
+    } catch {
+      try {
+        const data = await this._publicGet('/api/v2/mix/market/ticker', {
+          symbol: m.symbol,
+          productType: PRODUCT,
+        });
+        const row = Array.isArray(data) ? data[0] : data;
+        return Number(row?.fundingRate || 0) || 0;
+      } catch {
+        return 0;
+      }
+    }
+  }
+
   // ---------- trading ----------
   async setLeverage(marketId, x) {
     const m = this._market(marketId);

@@ -18,6 +18,8 @@ import { analyzeTrend } from './trend.js';
 import { setupProxy } from './proxy.js';
 import { syncOfficialPnlSince } from './pnlSince.js';
 import { attachFleetHealth } from './fleet-health.js';
+import { startAgentLoop, decideAll, syncAgentModes, getLastAgentDecisions } from './agent-loop.js';
+import { agentTrendEnabled } from './agent-trend.js';
 
 
 const cfg = getConfig();
@@ -90,15 +92,35 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/trend') {
       const marketId = Number(url.searchParams.get('marketId') || 1);
-      const intervalSec = Number(url.searchParams.get('intervalSec') || 3600);
+      const intervalSec = Number(url.searchParams.get('intervalSec') || (agentTrendEnabled() ? 14400 : 3600));
       let candles = [];
       try { candles = await exchange.getCandles(marketId, intervalSec, 200); } catch (e) { /* tolerate */ }
       let price = null; try { price = await exchange.getPrice(marketId); } catch {}
+      let funding = 0; try { funding = await exchange.getFundingRate?.(marketId) ?? 0; } catch {}
       const analysis = (candles && candles.length >= 20)
-        ? analyzeTrend(candles)
+        ? analyzeTrend(candles, funding)
         : { trend: 'range', recommended: 'neutral', strength: 0, atrPct: null, price,
             detail: '暂时拿不到足够K线数据，已默认中性网格。可手动设置上下边界后启动；不影响下单。' };
-      return send(res, 200, { analysis, candles: (candles || []).slice(-120) });
+      return send(res, 200, { analysis, candles: (candles || []).slice(-120), funding8h: funding, agent: agentTrendEnabled() });
+    }
+
+    if (p === '/api/agent/status') {
+      return send(res, 200, {
+        enabled: agentTrendEnabled(),
+        intervalMs: Number(process.env.GRID_AGENT_INTERVAL_MS || 4 * 60 * 60 * 1000),
+        decisions: getLastAgentDecisions(),
+        source: 'bitget-fleet-grid-agent trend rules (ADX/RSI/funding)',
+      });
+    }
+
+    if (p === '/api/agent/decide' && req.method === 'POST') {
+      try {
+        const body = await readBody(req);
+        const decisions = await decideAll(exchange);
+        let sync = null;
+        if (body?.apply) sync = await syncAgentModes(fleet, exchange, { forceRestart: true });
+        return send(res, 200, { ok: true, decisions, sync });
+      } catch (e) { return send(res, 400, { error: e.message }); }
     }
 
     if (p === '/api/state') return send(res, 200, fleet.getState());
@@ -321,5 +343,6 @@ server.listen(cfg.port, async () => {
     }, 60_000);
   }
   startFleetMaintainer(fleet, exchange);
-  console.log('[Fleet] 固定 BTC/ETH/SOL 三标 + DGT 移框 + 空转自愈已启用\n');
+  startAgentLoop(fleet, exchange);
+  console.log('[Fleet] 固定 BTC/ETH/SOL 三标 + DGT 移框 + Agent 趋势闭环 + 空转自愈已启用\n');
 });
