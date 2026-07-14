@@ -14,19 +14,14 @@ Next K Protocol 是 Next K 交易系统的**执行层服务**，负责：
 - 直接代理币安实时账户摘要与当前持仓列表
 - 记录执行日志与请求结果
 
-### 与 next-k-api 的关系
+### 与 next-k-api / 前端的关系
 
 ```
-+---------------------+     HTTP POST      +----------------------+
-|    next-k-api        |------------------>|  Next K Protocol     |
-|  (ZCT 扫描/信号生成)  |  /api/binance/     |  (交易执行/持仓管理)   |
-|                      |  signals/ingest    |                      |
-|  accumulation.db     |                    |  binance.db          |
-|                      |                    |  Binance Futures API |
-+---------------------+                    +----------------------+
+next-k-api ──/api/binance/*──► Next K Protocol（币安执行）
+next-k-frontend/wangge.html ─► Protocol / （3xx-wangge 原样总控台+AI）
 ```
 
-next-k-api 负责市场数据分析和信号生成，Next K Protocol 负责信号执行和实时账户/持仓读取。两者通过 HTTP API 解耦。
+`vendor/wangge` = `3xx-wangge-main` 绝对对齐源码（暂未接 Bitget）。详见 `docs/WANGGE.md`。
 
 ### 架构图
 
