@@ -18,8 +18,6 @@
 
 探测：`GET /grid-bot/_status` · `GET /grid-bot/api/health`
 
-Agent 趋势闭环（黑客松规则）：见 `docs/AGENT.md` · `GRID_AGENT_TREND=1`
-
 ```powershell
 cd vendor\bitget-grid
 npm run selfcheck
