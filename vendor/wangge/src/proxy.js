@@ -124,21 +124,22 @@ export async function createDispatcher(proxyUrl) {
  * 若三者代理不同，警告用户；若需独立代理，建议分开部署。
  */
 export async function setupProxies(cfg) {
-  const { globalProxy, de, ex, rs } = cfg;
+  const { globalProxy, de, ex, rs, bg } = cfg;
 
   const proxies = {
     global: globalProxy || '',
     de: de.proxy || '',
     ex: ex.proxy || '',
     rs: rs.proxy || '',
+    bg: bg?.proxy || '',
   };
 
   // 选出实际要设置的代理（全局 > 各交易所）
-  const effective = proxies.global || proxies.de || proxies.ex || proxies.rs;
-  if (!effective) return { de: null, ex: null, rs: null, used: null };
+  const effective = proxies.global || proxies.de || proxies.ex || proxies.rs || proxies.bg;
+  if (!effective) return { de: null, ex: null, rs: null, bg: null, used: null };
 
   // 检查是否有不同的代理
-  const uniqueProxies = new Set([proxies.de, proxies.ex, proxies.rs].filter(Boolean));
+  const uniqueProxies = new Set([proxies.de, proxies.ex, proxies.rs, proxies.bg].filter(Boolean));
   if (uniqueProxies.size > 1 && !proxies.global) {
     console.warn('[代理] ⚠ 检测到各交易所配置了不同代理，但 GLOBAL_PROXY 未设置。');
     console.warn('[代理]   由于 Node.js 全局 fetch 限制，将统一使用第一个有效代理。');

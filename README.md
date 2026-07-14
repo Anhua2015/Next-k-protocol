@@ -21,7 +21,7 @@ next-k-api ──/api/binance/*──► Next K Protocol（币安执行）
 next-k-frontend/wangge.html ─► Protocol / （3xx-wangge 原样总控台+AI）
 ```
 
-`vendor/wangge` = `3xx-wangge-main` 绝对对齐源码（暂未接 Bitget）。详见 `docs/WANGGE.md`。
+`vendor/wangge` = `3xx-wangge-main` 原壳 + Bitget（`bg`）第四所。详见 `docs/WANGGE.md`。
 
 ### 架构图
 

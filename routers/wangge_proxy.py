@@ -1,7 +1,7 @@
-"""Reverse-proxy 3xx-wangge (vendor/wangge) — absolute source alignment, no Bitget yet.
+"""Reverse-proxy 3xx-wangge (vendor/wangge) + Bitget fourth venue.
 
 Protocol keeps /api/binance/* /docs /redoc; everything else → wangge :8080
-(dashboard + /api/de|/ex|/rs|/overview|/ai|…).
+(dashboard + /api/de|/ex|/rs|/bg|/overview|/ai|…).
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-// 三交易所整合配置加载器
+// 四交易所整合配置加载器（Decibel / Extended / RISEx / Bitget）
 // 支持全局代理（GLOBAL_PROXY）+ 各交易所独立代理覆盖
 import fs from 'node:fs';
 import path from 'node:path';
@@ -88,6 +88,21 @@ export function getConfig() {
     proxy: process.env.RISEX_PROXY || globalProxy,
   };
 
+  // ── Bitget ────────────────────────────────────────────────────────────────
+  const bgNet = (process.env.BG_NETWORK || process.env.BITGET_NETWORK || 'mainnet').toLowerCase();
+  const bg = {
+    mode: (process.env.BG_MODE || process.env.BITGET_MODE || 'paper').toLowerCase() === 'live' ? 'live' : 'paper',
+    network: bgNet,
+    apiKey: process.env.BITGET_API_KEY || '',
+    apiSecret: process.env.BITGET_API_SECRET || '',
+    passphrase: process.env.BITGET_PASSPHRASE || '',
+    apiUrl: (process.env.BITGET_API_URL || 'https://api.bitget.com').replace(/\/$/, ''),
+    productType: (process.env.BITGET_PRODUCT_TYPE || 'USDT-FUTURES').toUpperCase(),
+    marginMode: (process.env.BITGET_MARGIN_MODE || 'crossed').toLowerCase(),
+    startBalance: Number(process.env.PAPER_BALANCE || 10000),
+    proxy: process.env.BITGET_PROXY || globalProxy,
+  };
+
   return {
     port: Number(process.env.PORT || 8080),
     // SECURITY: bind to loopback by default so the dashboard (which can start/stop
@@ -98,6 +113,7 @@ export function getConfig() {
     de,
     ex,
     rs,
+    bg,
   };
 }
 

@@ -9,7 +9,7 @@ import { aiChat, extractJson, notify, getAiConfig } from './provider.js';
 import { analyzeTrend } from '../trend.js';
 import { loadSnapshot, saveSnapshot } from '../persist.js';
 
-const EXNAMES = { de: 'Decibel', ex: 'Extended', rs: 'RISEx' };
+const EXNAMES = { de: 'Decibel', ex: 'Extended', rs: 'RISEx', bg: 'Bitget' };
 
 export function createAiService({ bots, exchanges }) {
   return new AiService(bots, exchanges);
@@ -17,8 +17,8 @@ export function createAiService({ bots, exchanges }) {
 
 class AiService {
   constructor(bots, exchanges) {
-    this.bots = bots;             // { de, ex, rs } -> GridBot
-    this.exchanges = exchanges;   // { de, ex, rs } -> adapter
+    this.bots = bots;             // { de, ex, rs, bg } -> GridBot
+    this.exchanges = exchanges;   // { de, ex, rs, bg } -> adapter
     this.sentinel = null;         // 最近一次巡检 {t, level, summary, detail, advice}
     this.sentinelHistory = [];    // 最近 20 条
     this.sentinelError = null;
@@ -81,7 +81,7 @@ class AiService {
   // ---------- 状态快照（喂给 AI 的紧凑上下文） ----------
   _snapshot() {
     const out = {};
-    for (const key of ['de', 'ex', 'rs']) {
+    for (const key of ['de', 'ex', 'rs', 'bg']) {
       const s = this.bots[key].getState();
       out[key] = {
         exchange: EXNAMES[key], tradeMode: s.mode,
@@ -114,13 +114,13 @@ class AiService {
       const text = await aiChat({
         small: true, json: true, maxTokens: 900, temperature: 0.1,
         system: [
-          '你是三交易所网格交易机器人的风控值守 AI。根据状态快照，对每个交易所分别给出巡检结论，并给一句整体结论。',
+          '你是四交易所网格交易机器人的风控值守 AI。根据状态快照，对每个交易所分别给出巡检结论，并给一句整体结论。',
           '重点关注：health.status 为 error/warn 及其 reason；trackedOrders 与 exchangeOpenOrders 明显不一致（挂单同步漂移）；',
           '保证金/权益吃紧（未实现亏损占权益比例大、returnPct 恶化）；outOfRange=true（价格冲出网格区间）；',
           '告警里的关键词（保证金不足、频繁取消、未确认成交、接口异常、暂停补单）；数据长时间未更新。',
           '注意：paper 是模拟盘，问题降级处理；未运行的交易所 level 用 ok、summary 写"未运行"即可。回复 JSON：',
           '{"overall":{"level":"ok|warn|critical","summary":"整体一句话(中文)"},',
-          '"per":{"de":{"level":"ok|warn|critical","summary":"该所结论(中文,50字内)","advice":"操作建议(中文,无则空)"},"ex":{...},"rs":{...}}}',
+          '"per":{"de":{"level":"ok|warn|critical","summary":"该所结论(中文,50字内)","advice":"操作建议(中文,无则空)"},"ex":{...},"rs":{...},"bg":{...}}}',
         ].join('\n'),
         messages: [{ role: 'user', content: '状态快照：\n' + JSON.stringify(snap) }],
       });
@@ -158,7 +158,7 @@ class AiService {
   // ---------- 2) 每日复盘 ----------
   _rebaseline() {
     const per = {};
-    for (const key of ['de', 'ex', 'rs']) {
+    for (const key of ['de', 'ex', 'rs', 'bg']) {
       const s = this.bots[key].getState();
       per[key] = { equity: s.equity, realizedPnl: s.realizedPnl, completedRungs: s.stats?.completedRungs || 0, volume: s.volume || 0 };
     }
@@ -173,7 +173,7 @@ class AiService {
       const snap = this._snapshot();
       const base = this._baseline;
       const diff = {};
-      for (const key of ['de', 'ex', 'rs']) {
+      for (const key of ['de', 'ex', 'rs', 'bg']) {
         const b = base?.per?.[key] || {};
         const s = snap[key];
         diff[key] = {
@@ -188,7 +188,7 @@ class AiService {
         json: false, maxTokens: 1200, temperature: 0.4,
         system: [
           '你是网格交易机器人的复盘分析师。用简洁的中文写一份运行日报（纯文本，不用 markdown 标题符号）。',
-          '内容：1)三所各自的盈亏归因（网格已实现 vs 持仓浮动）；2)成交活跃度与网格参数是否匹配（完成格数、间距）；',
+          '内容：1)各所各自的盈亏归因（网格已实现 vs 持仓浮动）；2)成交活跃度与网格参数是否匹配（完成格数、间距）；',
           '3)风险点（保证金、区间边缘、挂单异常）；4)下一步的 1-3 条可执行建议。',
           '数字保留两位小数；paper 为模拟盘要注明；没跑的交易所一句话带过。总长 300 字以内。',
         ].join('\n'),
@@ -257,17 +257,21 @@ class AiService {
     this._busy.market = true;
     try {
       let src = null, marketId = null;
-      for (const key of ['ex', 'de', 'rs']) {
+      for (const key of ['ex', 'de', 'rs', 'bg']) {
         const ex = this.exchanges[key];
         if (ex.dataSource !== 'real') continue; // 合成行情分析没有意义
         try {
           const ms = await ex.getMarkets();
-          const m = ms.find((x) => String(x.symbol || '').toUpperCase() === 'BTC'
-            || /^BTC[-/]/.test(String(x.displayName || '').toUpperCase()));
+          const m = ms.find((x) => {
+            const sym = String(x.symbol || '').toUpperCase();
+            const name = String(x.displayName || x.name || '').toUpperCase();
+            // Bitget: symbol=BTC, displayName=BTCUSDT；其它所: BTC-PERP / BTC-USD
+            return sym === 'BTC' || name === 'BTCUSDT' || /^BTC([-_/]|$)/.test(name);
+          });
           if (m) { src = key; marketId = m.marketId; break; }
         } catch { /* 换下一个所 */ }
       }
-      if (!src) throw new Error('没有可用的真实行情来源（三所均未连接或没有 BTC 市场）。');
+      if (!src) throw new Error('没有可用的真实行情来源（各所均未连接或没有 BTC 市场）。');
       this.market = await this._regime(src, marketId, {});
       this.marketError = null;
       this._save();
@@ -289,7 +293,7 @@ class AiService {
         '可用 action.type：adjust_range(params:{lower,upper}) | stop_grid(params:{closePosition:true/false}) |',
         'cancel_orders | close_position | reconnect | start_recovery(params:{aboveEntryOnly}) |',
         'start_grid(params:{marketId,mode,lower,upper,gridCount,sizeBase,leverage,outOfRangeAction}) | none',
-        'action.exchange 取 de|ex|rs。一次最多提议一个 action；用户没有明确要操作时 type 用 none。',
+        'action.exchange 取 de|ex|rs|bg。一次最多提议一个 action；用户没有明确要操作时 type 用 none。',
         '涉及平仓/停止等不可逆操作时，在 reply 里先说明后果。',
         '回复 JSON：{"reply":"给用户的中文回复","action":{"type":"none","exchange":"de","params":{}}}',
       ].join('\n'),
@@ -303,14 +307,14 @@ class AiService {
     // 白名单过滤：任何未知 action 一律置为 none
     const ALLOWED = ['adjust_range', 'stop_grid', 'cancel_orders', 'close_position', 'reconnect', 'start_recovery', 'start_grid', 'none'];
     if (!j.action || !ALLOWED.includes(j.action.type)) j.action = { type: 'none' };
-    if (j.action.type !== 'none' && !['de', 'ex', 'rs'].includes(j.action.exchange)) j.action = { type: 'none' };
+    if (j.action.type !== 'none' && !['de', 'ex', 'rs', 'bg'].includes(j.action.exchange)) j.action = { type: 'none' };
     return { reply: j.reply || '', action: j.action };
   }
 
   // ---------- 5) 出区间建议（跳变触发） ----------
   async _checkOutOfRange() {
     const cfg = getAiConfig();
-    for (const key of ['de', 'ex', 'rs']) {
+    for (const key of ['de', 'ex', 'rs', 'bg']) {
       const bot = this.bots[key];
       const cur = !!(bot.running && bot.outOfRange);
       const prev = !!this._prevOor[key];
