@@ -1,0 +1,16 @@
+{
+  "name": "bitget-grid",
+  "version": "1.0.0",
+  "description": "Neutral grid fleet forked from grid-fleet extended-grid — Bitget USDT-M only. Strategy code unchanged.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "selfcheck": "node exchange/selfcheck.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "undici": "^6.19.8"
+  }
+}
