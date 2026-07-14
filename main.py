@@ -117,8 +117,8 @@ app.add_middleware(
     # 环境变量后改回白名单（参考 _parse_cors_origins 注释）。
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
 
 from router import router
@@ -127,13 +127,9 @@ app.include_router(router)
 from routers.metrics import router as metrics_router
 app.include_router(metrics_router)
 
-from routers.grid_bot import router as grid_bot_router
-app.include_router(grid_bot_router)
-
-logger.info("Routes registered: /api/binance/*, /grid-bot/* (Bitget grid)")
+logger.info("Routes registered: /api/binance/*")
 logger.info("Swagger docs: http://0.0.0.0:%d/docs", PORT)
 logger.info("Health check: http://0.0.0.0:%d/api/binance/health", PORT)
-logger.info("Grid bot status: http://0.0.0.0:%d/grid-bot/_status", PORT)
 
 
 if __name__ == "__main__":
