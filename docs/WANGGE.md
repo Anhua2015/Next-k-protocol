@@ -6,25 +6,13 @@
 
 | 项 | 说明 |
 |----|------|
-| 交易所 | 仅 Bitget（一条连接，**账户余额共享**） |
-| 机器人 | `BG_SYMBOLS=BTCUSDT,ETHUSDT,...`，一标的一个 `GridBot` |
-| 默认 | `BG_MODE=paper` |
-| 实盘 | `BG_MODE=live` + API Key / Secret / Passphrase |
-| 持久化 | `.state.json` 键 `sym_BTCUSDT` 等；旧键 `bg` 按配置标的迁移后删除 |
-| 盈亏 | 各标的用该网格 `gridProfit` + 本市场浮动；总览可求和格盈亏；余额/权益取共享账户一次 |
+| 交易所 | 仅 Bitget（共享账户） |
+| 选币官 | 自维护候选池；按成交额+ATR+趋势打分；**最多 5 个**机器人自动开停 |
+| 托管 | 启动后 EMA/ATR 自动调区间/换向（paper/live 同规则） |
+| 模式 | `BG_MODE=paper` / `live` |
 
-不做假独立余额：保证金预检用真实账户权益；多标的会竞争同一保证金池。
+## 无干预
 
-## API
+进程起来后选币官约 20s 首次巡检，之后默认每 **2 小时**：只开高分标的（需连续确认），**至少持有 6 小时**才可淘汰/替换。少换、选稳。
 
-- `GET /api/overview` — 各标的汇总（共享账户）
-- `GET/POST/DELETE /api/symbols` — 标的增删
-- `/api/s/:SYM/start|stop|state|stream|...` — 单标的控制
-- `POST /api/exchange/reconnect` — 重连 Bitget
-- `/api/bg/*` — 兼容旧路径，优先映射到 `BTCUSDT`
-
-## 运行
-
-wangge Node → `127.0.0.1:8080`，Protocol 反代。前端 `wangge.html` iframe。
-
-详见 `vendor/wangge/.env.example`。
+详见 `.env.example`。

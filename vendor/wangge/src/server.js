@@ -10,6 +10,8 @@ import { analyzeTrend } from './trend.js';
 import { setupProxies, checkProxy } from './proxy.js';
 import { loadSnapshot, saveSnapshot, deleteSnapshot, loadState } from './persist.js';
 import { createAiService } from './ai/service.js';
+import { createScout } from './scout.js';
+import { getAutoLog, pushAutoLog } from './autolog.js';
 
 const cfg = getConfig();
 
@@ -104,6 +106,14 @@ const aiService = createAiService({
 });
 aiService.start();
 
+const scout = createScout({
+  exchange,
+  fleet,
+  persistSymbols: () => { try { persistSymbolsEnv(); } catch (e) { console.error(e?.message || e); } },
+  getMode: () => cfg.bg.mode,
+  log: (m) => { try { console.log(m); } catch {} },
+});
+
 exchange.on('error', (e) => {
   try { console.error('[Bitget] ' + (e?.message || e)); } catch {}
   for (const sym of fleet.list()) {
@@ -156,6 +166,7 @@ function pick(s, mode) {
     openOrders: s.openOrders ?? 0, exchangeOpenOrders: s.exchangeOpenOrders ?? null,
     outOfRange: s.outOfRange ?? false, health: s.health ?? null,
     lastPrice: s.lastPrice, config: s.config,
+    autopilot: s.autopilot ?? null,
   };
 }
 
@@ -170,6 +181,8 @@ function buildOverview() {
     dataSource: exchange.dataSource || null,
     sharedAccount: true,
     symbols,
+    scout: scout.status(),
+    autoLog: getAutoLog(50),
   };
 }
 
@@ -251,6 +264,16 @@ async function handleSymbolApi(req, res, sym, subPath, url) {
     try { return send(res, 200, await bot.cancelAllOrders()); }
     catch (e) { return send(res, 400, { error: e.message }); }
   }
+  if (subPath === '/autopilot' && req.method === 'POST') {
+    try { return send(res, 200, bot.setAutopilot(await readBody(req))); }
+    catch (e) { return send(res, 400, { error: e.message }); }
+  }
+  if (subPath === '/autopilot-run' && req.method === 'POST') {
+    try {
+      const r = await bot.runAutopilotTick();
+      return send(res, 200, { ok: true, decision: r, state: bot.getState() });
+    } catch (e) { return send(res, 400, { error: e.message }); }
+  }
   if (subPath === '/start-recovery' && req.method === 'POST') {
     try {
       const body = await readBody(req);
@@ -268,7 +291,7 @@ async function handleSymbolApi(req, res, sym, subPath, url) {
 
   if (subPath === '/stream') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-    res.write(`data: ${JSON.stringify(bot.getState())}\n\n`);
+    res.write(`data: ${JSON.stringify(bot.getState(), jsonReplacer)}\n\n`);
     if (!streamClients.has(sym)) streamClients.set(sym, new Set());
     streamClients.get(sym).add(res);
     req.on('close', () => streamClients.get(sym)?.delete(res));
@@ -300,7 +323,7 @@ const server = http.createServer(async (request, res) => {
         const b = await readBody(request);
         const sym = normalizeSymbol(b.symbol);
         if (!sym) return send(res, 400, { error: '请提供 symbol，如 ETHUSDT' });
-        if (fleet.list().length >= 20) return send(res, 400, { error: '最多 20 个标的' });
+        if (fleet.list().length >= 5) return send(res, 400, { error: '最多 5 个标的（选币官自动维护）' });
         const ds = exchange.dataSource;
         if (ds == null || ds === 'connecting') {
           return send(res, 400, { error: 'Bitget 尚未就绪，请稍后重试或先点「重连」' });
@@ -359,6 +382,11 @@ const server = http.createServer(async (request, res) => {
     }
 
     if (p === '/api/ai/status') return send(res, 200, aiService.status());
+    if (p === '/api/scout') return send(res, 200, scout.status());
+    if (p === '/api/scout/run' && request.method === 'POST') {
+      try { return send(res, 200, await scout.tick()); }
+      catch (e) { return send(res, 500, { error: e?.message || String(e) }); }
+    }
     if (p === '/api/ai/test' && request.method === 'POST') {
       try { return send(res, 200, await aiService.test()); }
       catch (e) { return send(res, 200, { ok: false, error: e?.message || String(e) }); }
@@ -511,6 +539,8 @@ server.listen(cfg.port, cfg.host, () => {
   console.log(`  仪表盘: http://${cfg.host === '0.0.0.0' ? 'localhost' : cfg.host}:${cfg.port}`);
   console.log(`${'═'.repeat(52)}`);
   console.log(`  模式    ${cfg.bg.mode.toUpperCase()} · 共享账户余额`);
-  console.log(`  标的    ${fleet.list().join(', ')}`);
+  console.log(`  标的    ${fleet.list().join(', ') || '（由选币官自动填充，最多5个）'}`);
   console.log('');
+  pushAutoLog({ source: '系统', type: 'boot', message: `wangge 已启动 · ${cfg.bg.mode.toUpperCase()} · 选币官最多 ${5} 个机器人` });
+  scout.start();
 });

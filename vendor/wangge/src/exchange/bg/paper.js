@@ -12,7 +12,7 @@ export class PaperExchange extends EventEmitter {
   constructor(opts = {}) {
     super();
     this.mode = 'paper';
-    this.balance = opts.startBalance ?? 10000;
+    this.balance = opts.startBalance ?? 15000;
     this.productType = opts.productType || PRODUCT;
     this.candidates = [...new Set((opts.apiUrl ? [opts.apiUrl] : []).concat([
       'https://api.bitget.com',

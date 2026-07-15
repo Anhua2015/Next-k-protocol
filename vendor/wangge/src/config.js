@@ -34,7 +34,7 @@ function parseSymbols(raw) {
     .split(/[,;\s]+/)
     .map(normalizeSymbol)
     .filter(Boolean);
-  return [...new Set(list)];
+  return [...new Set(list)].slice(0, 5);
 }
 
 export function getConfig() {
@@ -55,7 +55,7 @@ export function getConfig() {
     apiUrl: (process.env.BITGET_API_URL || 'https://api.bitget.com').replace(/\/$/, ''),
     productType: (process.env.BITGET_PRODUCT_TYPE || 'USDT-FUTURES').toUpperCase(),
     marginMode: (process.env.BITGET_MARGIN_MODE || 'crossed').toLowerCase(),
-    startBalance: Number(process.env.PAPER_BALANCE || 10000),
+    startBalance: Number(process.env.PAPER_BALANCE || 15000),
     proxy: process.env.BITGET_PROXY || globalProxy,
     symbols: parseSymbols(process.env.BG_SYMBOLS || process.env.BITGET_SYMBOLS || 'BTCUSDT'),
   };

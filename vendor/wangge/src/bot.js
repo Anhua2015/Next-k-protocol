@@ -5,6 +5,9 @@
 // alerts (optional auto-stop), periodic open-order reconciliation, crash-safe
 // persistence with resume-on-restart, live range adjustment, and a health probe.
 import { buildGrid, seedOrders, replacementFor, isReduceOnly } from './grid.js';
+import { analyzeTrend } from './trend.js';
+import { defaultAutopilot, decideAutopilot, suggestFromTrend } from './autopilot.js';
+import { pushAutoLog } from './autolog.js';
 
 const RECONCILE_MS = 30000;   // periodic open-order reconciliation cadence
 const PRUNE_GRACE_MS = 20000; // don't prune a tracked order younger than this
@@ -49,6 +52,10 @@ export class GridBot {
     this._retryQueue = [];           // failed CLOSING-leg placements awaiting retry (never opening legs)
     this._noPosStreak = 0;           // consecutive empty-position observations (recovery finish guard)
     this._pnlBase = null;            // realizedPnl baseline when adapter refreshes from exchange each poll
+    this.autopilot = defaultAutopilot({});
+    this._autopilotTimer = null;
+    this._autopilotKick = null;
+    this._autopilotBusy = false;
   }
 
   /**
@@ -79,6 +86,7 @@ export class GridBot {
 
   /** Detach listeners when removing a fleet slot. */
   dispose() {
+    this._stopAutopilotTimer();
     try { this.ex.off('fill', this._onFill); } catch {}
     try { this.ex.off('price', this._onPrice); } catch {}
     if (this._boundError) {
@@ -96,6 +104,7 @@ export class GridBot {
       recovery: this.recovery, pnlBase: this._pnlBase,
       startBalance: this.startBalance, outOfRange: this.outOfRange, lastPrice: this.lastPrice,
       active: [...this.active.entries()],
+      autopilot: this.autopilot,
     };
   }
 
@@ -109,6 +118,7 @@ export class GridBot {
     this.stats = { buys: 0, sells: 0, completedRungs: 0, gridProfit: 0, volume: 0, ...(snap.stats || {}) };
     this.startBalance = snap.startBalance ?? null;
     this._pnlBase = snap.pnlBase ?? null;
+    if (snap.autopilot) this.autopilot = defaultAutopilot(snap.autopilot);
     try {
       this.grid = buildGrid({ lower: this.config.lower, upper: this.config.upper, gridCount: this.config.gridCount });
       this._recomputeRisk();
@@ -134,6 +144,7 @@ export class GridBot {
     this._pnlBase = snap.pnlBase ?? null;
     this.outOfRange = !!snap.outOfRange;
     this.lastPrice = snap.lastPrice ?? null;
+    if (snap.autopilot) this.autopilot = defaultAutopilot(snap.autopilot);
     this.grid = buildGrid({ lower: this.config.lower, upper: this.config.upper, gridCount: this.config.gridCount });
     this._recomputeRisk();
 
@@ -158,6 +169,7 @@ export class GridBot {
     if (typeof this.ex.start === 'function') this.ex.start();
     this.running = true;
     this._startReconcileTimer();
+    this._startAutopilotTimer();
     this._alert(`已恢复运行中的 ${this.config.displayName} ${labelMode(this.config.mode)}：接管 ${this.active.size} 个挂单，正在与交易所对账…`);
     this.reconcileOpenOrders().catch(() => {}); // immediate reconcile
     this._changed();
@@ -222,6 +234,15 @@ export class GridBot {
   async _start(cfg) {
     const market = (await this.ex.getMarkets()).find((m) => m.marketId === Number(cfg.marketId));
     if (!market) throw new Error('找不到该市场 marketId=' + cfg.marketId);
+
+    this.autopilot = defaultAutopilot({
+      ...(this.autopilot || {}),
+      ...(cfg.autopilot && typeof cfg.autopilot === 'object' ? cfg.autopilot : {}),
+      enabled: true, // 默认托管启动：启动即自动巡检
+    });
+
+    // Hands-off: if bounds missing, fill from trend analysis automatically.
+    cfg = await this._autofillBounds(cfg);
 
     const leverage = Math.min(Number(cfg.leverage || 3), market.maxLeverage || 50);
     const sizeBase = Math.max(Number(cfg.sizeBase), market.minOrderSize || 0);
@@ -292,43 +313,51 @@ export class GridBot {
     if (this.startBalance == null && typeof this.ex.balance === 'number') this.startBalance = this.ex.balance;
     this.running = true;
     this._startReconcileTimer();
-    this._alert(`已启动 ${this.config.displayName} ${labelMode(this.config.mode)}，${this.grid.count} 格，间距 ${this.grid.spacing}（${this.risk.spacingPct}%），杠杆 ${leverage}x，挂出 ${this.active.size} 单。`);
+    this._startAutopilotTimer();
+    const apNote = this.autopilot.enabled
+      ? `；自动托管已开启（约每 ${Math.round(this.autopilot.intervalMs / 60000)} 分钟巡检，冲突强度≥${Math.round(this.autopilot.minStrength * 100)}% 时自动处理）`
+      : '';
+    this._alert(`已启动 ${this.config.displayName} ${labelMode(this.config.mode)}，${this.grid.count} 格，间距 ${this.grid.spacing}（${this.risk.spacingPct}%），杠杆 ${leverage}x，挂出 ${this.active.size} 单${apNote}。`);
     this._changed();
     return this.getState();
   }
 
   async stop({ closePosition = true } = {}) {
     this._stopReconcileTimer();
+    this._stopAutopilotTimer();
+    let closeOk = true;
     if (!this.running) {
       if (this.config) {
         await this.ex.cancelAll(this.config.marketId).catch(() => {});
         if (closePosition && typeof this.ex.closePosition === 'function') {
-          await this._closeWithConfirm(this.config.marketId);
+          closeOk = await this._closeWithConfirm(this.config.marketId);
         }
-        this._alert('已尝试撤销该市场的所有挂单并平仓。');
+        this._alert(closeOk
+          ? '已尝试撤销该市场的所有挂单并平仓。'
+          : '已撤单，但平仓未确认成功，请检查交易所仓位。');
       }
       this.active.clear();
       this._retryQueue = [];
       this._changed();
-      return this.getState();
+      return { ...this.getState(), closeOk };
     }
     this.ex.off('fill', this._onFill);
     this.ex.off('price', this._onPrice);
     await this.ex.cancelAll(this.config.marketId).catch(() => {});
     this.active.clear();
-    let closeRequested = false;
     if (closePosition && typeof this.ex.closePosition === 'function') {
-      await this._closeWithConfirm(this.config.marketId);
-      closeRequested = true;
+      closeOk = await this._closeWithConfirm(this.config.marketId);
     }
     this.running = false;
     this.recovery = false;
     this._retryQueue = [];
-    this._alert(closeRequested
-      ? '机器人已停止：挂单已撤销，已发送平仓指令（请在交易所确认仓位已平）。'
+    this._alert(closePosition
+      ? (closeOk
+        ? '机器人已停止：挂单已撤销，已确认平仓。'
+        : '机器人已停止并撤单，但平仓未确认成功，请立即到交易所检查仓位！')
       : '机器人已停止，挂单已撤销（未平仓）。');
     this._changed();
-    return this.getState();
+    return { ...this.getState(), closeOk };
   }
 
   /**
@@ -340,6 +369,7 @@ export class GridBot {
   async cancelAllOrders() {
     if (!this.config) throw new Error('尚未配置市场，没有可撤的挂单。');
     this._stopReconcileTimer();
+    this._stopAutopilotTimer();
     this.ex.off('fill', this._onFill);
     this.ex.off('price', this._onPrice);
     await this.ex.cancelAll(this.config.marketId).catch((e) => this._alert('撤单失败: ' + (e?.message || e)));
@@ -881,9 +911,176 @@ export class GridBot {
   }
   _stopReconcileTimer() { if (this._reconTimer) { clearInterval(this._reconTimer); this._reconTimer = null; } }
 
+  _startAutopilotTimer() {
+    this._stopAutopilotTimer();
+    if (!this.autopilot?.enabled) return;
+    const ms = this.autopilot.intervalMs || 10 * 60_000;
+    this._autopilotTimer = setInterval(() => { this.runAutopilotTick().catch(() => {}); }, ms);
+    this._autopilotTimer.unref?.();
+    // First pass shortly after start/resume (not immediately to avoid fighting seed)
+    this._autopilotKick = setTimeout(() => {
+      this._autopilotKick = null;
+      this.runAutopilotTick().catch(() => {});
+    }, 15_000);
+    this._autopilotKick.unref?.();
+  }
+  _stopAutopilotTimer() {
+    if (this._autopilotTimer) { clearInterval(this._autopilotTimer); this._autopilotTimer = null; }
+    if (this._autopilotKick) { clearTimeout(this._autopilotKick); this._autopilotKick = null; }
+  }
+
+  /** Fill missing range / mode from trend so a single Start click is enough. */
+  async _autofillBounds(cfg) {
+    const needBounds = !(Number(cfg.lower) < Number(cfg.upper));
+    const needMode = !cfg.mode;
+    if (!needBounds && !needMode) return cfg;
+    try {
+      const candles = await this.ex.getCandles(Number(cfg.marketId), Number(cfg.intervalSec) || 3600, 200);
+      const analysis = analyzeTrend(candles || []);
+      const mode = cfg.mode || analysis.recommended || 'neutral';
+      const sug = suggestFromTrend(analysis, {
+        mode,
+        riskProfile: this.autopilot?.riskProfile || 'steady',
+        gridCount: cfg.gridCount != null ? Number(cfg.gridCount) : undefined,
+        leverage: cfg.leverage != null ? Number(cfg.leverage) : undefined,
+      });
+      if (!sug) return cfg;
+      const out = { ...cfg, mode };
+      if (needBounds) { out.lower = sug.lower; out.upper = sug.upper; }
+      if (cfg.gridCount == null) out.gridCount = sug.gridCount;
+      if (cfg.leverage == null) out.leverage = sug.leverage;
+      this._alert(`自动托管：已按趋势补齐参数（${mode} · [${out.lower}, ${out.upper}] · ${out.gridCount || cfg.gridCount} 格）。`);
+      return out;
+    } catch (e) {
+      if (needBounds) throw new Error('缺少区间且自动补齐失败：' + (e?.message || e));
+      return cfg;
+    }
+  }
+
+  setAutopilot(partial = {}) {
+    this.autopilot = defaultAutopilot({ ...this.autopilot, ...partial });
+    if (this.running) this._startAutopilotTimer();
+    else this._stopAutopilotTimer();
+    this._alert(this.autopilot.enabled
+      ? `自动托管已开启（间隔 ${Math.round(this.autopilot.intervalMs / 60000)} 分钟）`
+      : '自动托管已关闭');
+    this._changed();
+    return this.getState();
+  }
+
+  async runAutopilotTick() {
+    if (this._autopilotBusy || !this.running || !this.config || this.recovery) return null;
+    if (!this.autopilot?.enabled) return null;
+    this._autopilotBusy = true;
+    try {
+      const candles = await this.ex.getCandles(this.config.marketId, 3600, 200);
+      const analysis = analyzeTrend(candles || []);
+      this.autopilot.lastTrend = {
+        t: Date.now(), trend: analysis.trend, recommended: analysis.recommended,
+        strength: analysis.strength, atrPct: analysis.atrPct, price: analysis.price,
+      };
+      const decision = decideAutopilot({
+        analysis, config: this.config, lastPrice: this.lastPrice,
+        autopilot: this.autopilot, now: Date.now(),
+      });
+      if (!decision || decision.action === 'none') {
+        this._changed();
+        return decision;
+      }
+
+      if (decision.action === 'adjust') {
+        try {
+          await this.adjustRange(decision.params);
+          this.autopilot.lastActionAt = Date.now();
+          this.autopilot.lastAction = { t: Date.now(), ...decision };
+          this._alert(`🤖 自动托管：${decision.reason} → [${decision.params.lower}, ${decision.params.upper}]`);
+        } catch (e) {
+          this._alert('🤖 自动调区间失败：' + (e?.message || e));
+        }
+        this._changed();
+        return decision;
+      }
+
+      if (decision.action === 'guard_recover') {
+        const marketId = this.config.marketId;
+        this._alert(`🤖 自动托管：${decision.reason}`);
+        await this.stop({ closePosition: false });
+        try {
+          await this.startRecovery({ marketId, aboveEntryOnly: false });
+          this.autopilot.lastActionAt = Date.now();
+          this.autopilot.lastAction = { t: Date.now(), ...decision };
+        } catch (e) {
+          this._alert('自动切回收失败：' + (e?.message || e) + '（网格已停，持仓保留）');
+        }
+        this._changed();
+        return decision;
+      }
+
+      if (decision.action === 'guard_stop') {
+        this._alert(`🤖 自动托管：${decision.reason}`);
+        const st = await this.stop({ closePosition: true });
+        if (st.closeOk === false) {
+          this._alert('🤖 守卫停机：平仓未确认，请人工检查仓位');
+        } else {
+          this.autopilot.lastActionAt = Date.now();
+          this.autopilot.lastAction = { t: Date.now(), ...decision };
+        }
+        this._changed();
+        return decision;
+      }
+
+      if (decision.action === 'flip') {
+        this._alert(`🤖 自动托管：${decision.reason}`);
+        const ap = { ...this.autopilot };
+        const marketId = this.config?.marketId;
+        const st = await this.stop({ closePosition: true });
+        if (st.closeOk === false) {
+          this.autopilot = ap;
+          this._alert('🤖 换向中止：原仓位未确认平掉，不会重开新网格');
+          this._changed();
+          return { ...decision, action: 'flip-aborted' };
+        }
+        // Extra guard: do not start if residual position remains
+        const leftover = marketId != null ? this.ex.getPosition?.(marketId) : null;
+        if (leftover && Math.abs(leftover.sizeBase) > 0) {
+          this.autopilot = ap;
+          this._alert('🤖 换向中止：检测到残留仓位，不会重开新网格');
+          this._changed();
+          return { ...decision, action: 'flip-aborted' };
+        }
+        try {
+          await this.start({ ...decision.params, autopilot: ap });
+          this.autopilot.lastActionAt = Date.now();
+          this.autopilot.lastAction = { t: Date.now(), ...decision };
+        } catch (e) {
+          this.autopilot = ap;
+          this._alert('自动换向重开失败：' + (e?.message || e));
+        }
+        this._changed();
+        return decision;
+      }
+
+      return decision;
+    } catch (e) {
+      this._alert('自动托管巡检失败：' + (e?.message || e));
+      return null;
+    } finally {
+      this._autopilotBusy = false;
+    }
+  }
+
   _alert(message) {
     this.alerts.unshift({ t: Date.now(), message });
     if (this.alerts.length > 30) this.alerts.pop();
+    const msg = String(message || '');
+    if (/自动托管|选币|🤖/.test(msg)) {
+      pushAutoLog({
+        source: '自动托管',
+        symbol: this.config?.displayName || '',
+        type: 'autopilot',
+        message: msg,
+      });
+    }
   }
 
   /** Per-exchange health classification surfaced to the dashboard. */
@@ -957,6 +1154,16 @@ export class GridBot {
       startBalance: this.startBalance != null ? round2(this.startBalance) : null,
       fills: this.fills.slice(0, 20),
       alerts: this.alerts.slice(0, 12),
+      autopilot: this.autopilot ? {
+        enabled: !!this.autopilot.enabled,
+        riskProfile: this.autopilot.riskProfile,
+        intervalMs: this.autopilot.intervalMs,
+        minStrength: this.autopilot.minStrength,
+        allowFlip: !!this.autopilot.allowFlip,
+        lastActionAt: this.autopilot.lastActionAt || 0,
+        lastAction: this.autopilot.lastAction || null,
+        lastTrend: this.autopilot.lastTrend || null,
+      } : null,
     };
   }
 }

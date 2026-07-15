@@ -280,6 +280,21 @@ th { color: var(--mut2); font-weight: 600; font-size: 10px; letter-spacing: .3px
 .fleet-bar input { width: 180px; }
 .fleet-bar .btn { width: auto; margin: 0; padding: 7px 14px; font-size: 12px; }
 
+.auto-log {
+  max-height: 280px; overflow-y: auto; font-size: 12px; line-height: 1.55;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg2); padding: 8px 10px;
+}
+.auto-log .al-row { display: grid; grid-template-columns: 64px 56px 72px 1fr; gap: 8px; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.auto-log .al-row:last-child { border-bottom: none; }
+.auto-log .al-time { color: var(--mut); font-variant-numeric: tabular-nums; }
+.auto-log .al-src { color: var(--gold, #d4b483); }
+.auto-log .al-sym { color: var(--txt); font-weight: 600; }
+.auto-log .al-msg { color: var(--mut2); }
+@media (max-width: 720px) {
+  .auto-log .al-row { grid-template-columns: 52px 1fr; gap: 2px 8px; }
+  .auto-log .al-src, .auto-log .al-sym { grid-column: 2; }
+}
+
 @media (max-width: 1100px) {
   .overview-grid { grid-template-columns: 1fr 1fr; }
 }
@@ -343,11 +358,21 @@ th { color: var(--mut2); font-weight: 600; font-size: 10px; letter-spacing: .3px
     </div>
   </div>
 
-  <p class="muted" style="margin:-6px 0 14px;font-size:12px">Bitget 统一账户，多标的共享余额</p>
+  <p class="muted" style="margin:-6px 0 14px;font-size:12px">Bitget 统一账户，多标的共享余额 · 选币官自动维护候选池（最多 5 个机器人）</p>
+
+  <div class="panel" style="margin-bottom:14px">
+    <div class="panel-title">选币官 · 候选池<span id="scout-meta" class="muted" style="font-size:11px;margin-left:10px;font-weight:400"></span></div>
+    <div id="scout-status" class="muted" style="font-size:12px;margin-bottom:8px">等待首次巡检…</div>
+    <div id="scout-pool" class="muted" style="font-size:12px;line-height:1.6">—</div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <button class="btn btn-ghost" style="margin:0;width:auto;padding:6px 14px;font-size:12px" onclick="scoutRun(this)">立即巡检</button>
+      <span id="scout-actions" class="muted" style="font-size:11px;align-self:center"></span>
+    </div>
+  </div>
 
   <div class="fleet-bar">
     <div>
-      <label style="margin-top:0">添加标的</label>
+      <label style="margin-top:0">手动添加（可选）</label>
       <input id="new-sym-input" type="text" placeholder="例：ETHUSDT" autocomplete="off">
     </div>
     <button class="btn btn-smart" onclick="addSymbol(this)">添加</button>
@@ -356,6 +381,11 @@ th { color: var(--mut2); font-weight: 600; font-size: 10px; letter-spacing: .3px
   </div>
 
   <div class="overview-grid" id="ov-grid"></div>
+
+  <div class="panel" style="margin-top:14px">
+    <div class="panel-title">自动化运行日志<span class="muted" style="font-size:11px;margin-left:10px;font-weight:400">选币官 · 自动托管</span></div>
+    <div id="auto-log" class="auto-log"><div class="muted">暂无自动化日志</div></div>
+  </div>
 
   <div class="panel" style="margin-top:14px">
     <div class="panel-title">AI 市况分析 · BTC<span id="ov-ai-mkt-time" class="muted" style="font-size:11px;margin-left:10px;font-weight:400"></span></div>
@@ -585,7 +615,8 @@ function symbolPanelHtml(sym) {
         <span class="muted" id="${p}-risk-hint">成交少·更安全</span>
       </div>
       <button class="btn btn-smart" id="${p}-smart-fill">智能填充参数</button>
-      <div class="muted" id="${p}-smart-note" style="margin:5px 0 2px"></div>
+      <div class="muted" id="${p}-smart-note" style="margin:5px 0 2px">默认：分析行情 → 托管启动 → 后续自动调区间/守卫</div>
+      <div class="muted" id="${p}-autopilot-st" style="font-size:11px;margin-bottom:6px">自动托管：启动后默认开启</div>
       <div class="row">
         <div><label>下边界</label><input id="${p}-lower" type="number" step="any"></div>
         <div><label>上边界</label><input id="${p}-upper" type="number" step="any"></div>
@@ -599,13 +630,13 @@ function symbolPanelHtml(sym) {
         <div>
           <label>区间外止损策略</label>
           <select id="${p}-auto-stop">
-            <option value="close" selected>冲破区间平仓</option>
-            <option value="recover">只减仓回收阶梯</option>
+            <option value="recover" selected>只减仓回收阶梯</option>
+            <option value="close">冲破区间平仓</option>
           </select>
         </div>
       </div>
       <div class="risk-preview" id="${p}-risk-preview"></div>
-      <button class="btn btn-start" id="${p}-start-btn">启动 ${shortName(sym)} 网格</button>
+      <button class="btn btn-start" id="${p}-start-btn">托管启动 ${shortName(sym)}</button>
       <button class="btn btn-stop" id="${p}-stop-btn" disabled>停止 + 撤单 + 平仓</button>
       <button class="btn btn-ghost" id="${p}-adjust-btn" disabled style="margin-top:8px">调整区间（不停止网格）</button>
       <button class="btn btn-ghost" id="${p}-cancel-orders-btn" style="margin-top:8px;border-color:var(--yel);color:var(--yel)">撤销所有挂单（保留持仓）</button>
@@ -681,6 +712,7 @@ function overviewCardHtml(sym) {
         <div class="ov-stat"><span class="lbl">当前市场</span><span class="val" id="ov-${sym}-mkt">—</span></div>
       </div>
       <div id="ov-${sym}-gridcfg" class="gridcfg" style="display:none"></div>
+      <div id="ov-${sym}-ap" class="muted" style="font-size:11px;margin-top:8px"></div>
       <div id="ov-${sym}-ai" class="ai-box muted" style="display:none;margin-top:8px;font-size:12px"></div>
       <div id="ov-${sym}-trend" class="trend-box trend-idle">趋势监测：等待数据…</div>
       <button class="btn btn-ghost" style="margin-top:10px;font-size:12px" onclick="switchTab('${sym}')">进入 ${shortName(sym)} 控制台 →</button>
@@ -849,15 +881,43 @@ function makeExchangeCtrl(sym) {
   ['grid-count','leverage'].forEach(id => P(id).addEventListener('change', sizeByBalance));
 
   P('start-btn').onclick = async () => {
-    const body = {
-      marketId: +P('market').value, mode: selectedMode,
-      lower: +P('lower').value, upper: +P('upper').value,
-      gridCount: +P('grid-count').value, sizeBase: +P('size-base').value,
-      leverage: +P('leverage').value, outOfRangeAction: P('auto-stop').value,
-    };
-    const r = await fetch(apiS(sym, '/start'), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-    const j = await r.json();
-    if (j.error) alert('启动失败：' + j.error);
+    const btn = P('start-btn');
+    const old = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '分析并托管启动中…';
+    try {
+      await refreshTrend();
+      if (curTrend?.price) {
+        setMode(curTrend.recommended);
+        applyStrategyByRisk();
+      }
+      const body = {
+        marketId: +P('market').value,
+        mode: selectedMode,
+        lower: +P('lower').value,
+        upper: +P('upper').value,
+        gridCount: +P('grid-count').value,
+        sizeBase: +P('size-base').value,
+        leverage: +P('leverage').value,
+        outOfRangeAction: P('auto-stop').value || 'recover',
+        autopilot: { enabled: true, riskProfile, allowFlip: true },
+      };
+      const r = await fetch(apiS(sym, '/start'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      if (P('smart-note')) {
+        P('smart-note').textContent = '✅ 已托管启动：后续自动调区间/守卫，无需再操作。';
+      }
+    } catch (e) {
+      alert('托管启动失败：' + e.message);
+    } finally {
+      btn.textContent = old;
+      // render() will set disabled based on running state
+      if (!lastState?.running) btn.disabled = false;
+    }
   };
 
   P('stop-btn').onclick = async () => {
@@ -906,7 +966,7 @@ function makeExchangeCtrl(sym) {
     const lower = +P('lower').value, upper = +P('upper').value, n = +P('grid-count').value, sz = +P('size-base').value, lev = +P('leverage').value;
     if (!(upper > lower) || !n || !sz) { alert('无法自动计算区间，请在左侧手动填写参数后点"启动"。'); return; }
     if (!confirm(`按现价重开网格：区间 [${lower}, ${upper}]，${n} 格，每格 ${sz}，${lev}x。\n现有持仓将作为网格库存保留。继续？`)) return;
-    const body = { marketId: +P('market').value, mode: 'neutral', lower, upper, gridCount: n, sizeBase: sz, leverage: lev, outOfRangeAction: P('auto-stop').value };
+    const body = { marketId: +P('market').value, mode: 'neutral', lower, upper, gridCount: n, sizeBase: sz, leverage: lev, outOfRangeAction: P('auto-stop').value || 'recover', autopilot: { enabled: true, riskProfile, allowFlip: true } };
     const r = await fetch(apiS(sym, '/start'), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
     const j = await r.json();
     if (j.error) alert('启动失败：' + j.error);
@@ -931,7 +991,23 @@ function makeExchangeCtrl(sym) {
     P('start-btn').disabled = run;
     P('stop-btn').disabled = !run;
     if (P('adjust-btn')) P('adjust-btn').disabled = !run;
-    P('st-run').innerHTML = run ? `<span class="badge badge-run">运行中（${modeLabel(s.config?.mode)}）</span>` : '<span class="badge badge-stop">未运行</span>';
+    P('st-run').innerHTML = run
+      ? `<span class="badge badge-run">运行中（${modeLabel(s.config?.mode)}）</span>`
+        + (s.autopilot?.enabled ? ' <span class="badge badge-paper" style="margin-left:6px">自动托管</span>' : '')
+      : '<span class="badge badge-stop">未运行</span>';
+    if (P('autopilot-st')) {
+      if (s.autopilot?.enabled) {
+        const t = s.autopilot.lastTrend;
+        const act = s.autopilot.lastAction;
+        const tTxt = t ? `${t.trend || '—'} · 建议${t.recommended || '—'} · 强度${Math.round((t.strength || 0) * 100)}%` : '等待首次巡检';
+        const aTxt = act ? `上次：${act.reason || act.action}` : '';
+        P('autopilot-st').textContent = `自动托管中 · ${tTxt}${aTxt ? ' · ' + aTxt : ''}`;
+      } else if (run) {
+        P('autopilot-st').textContent = '自动托管：关（异常）';
+      } else {
+        P('autopilot-st').textContent = '自动托管：点「托管启动」后默认开启并自动巡检';
+      }
+    }
     P('st-price').textContent = s.lastPrice ?? '—';
     P('st-bal').textContent = s.balance ?? '—';
     P('st-eq').textContent = s.equity ?? '—';
@@ -1332,6 +1408,20 @@ function renderOverview(data) {
         gc.innerHTML = '';
       }
     }
+
+    const apEl = $(`ov-${sym}-ap`);
+    if (apEl) {
+      if (d.running && d.autopilot?.enabled) {
+        const t = d.autopilot.lastTrend;
+        apEl.textContent = t
+          ? `🤖 自动托管 · ${t.trend}/${t.recommended} · 强度${Math.round((t.strength || 0) * 100)}%`
+          : '🤖 自动托管中（等待巡检）';
+      } else if (d.running) {
+        apEl.textContent = '自动托管：关';
+      } else {
+        apEl.textContent = '';
+      }
+    }
   }
 
   // Header mode
@@ -1356,6 +1446,76 @@ function renderOverview(data) {
     ? '<span class="muted">全部停止</span>'
     : `<span class="up">${running}/${n} 运行中</span>`;
   $('tot-modes').textContent = `Bitget · ${String(data.mode || bgMode || 'paper').toUpperCase()} · 共享账户`;
+
+  renderScout(data.scout);
+  renderAutoLog(data.autoLog);
+}
+
+function renderAutoLog(rows) {
+  const box = $('auto-log');
+  if (!box) return;
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) {
+    box.innerHTML = '<div class="muted">暂无自动化日志（选币巡检 / 托管调参后会出现）</div>';
+    return;
+  }
+  box.innerHTML = list.map((e) => {
+    const t = e.t ? new Date(e.t).toLocaleTimeString('zh-CN', { hour12: false }) : '—';
+    const src = e.source || '系统';
+    const sym = e.symbol || '—';
+    const msg = String(e.message || '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+    return `<div class="al-row"><span class="al-time">${t}</span><span class="al-src">${src}</span><span class="al-sym">${sym}</span><span class="al-msg">${msg}</span></div>`;
+  }).join('');
+}
+
+function renderScout(sc) {
+  if (!sc) return;
+  const meta = $('scout-meta');
+  const st = $('scout-status');
+  const pool = $('scout-pool');
+  const acts = $('scout-actions');
+  if (meta) {
+    const ago = sc.lastRunAt ? `${Math.round((Date.now() - sc.lastRunAt) / 60000)} 分钟前` : '尚未运行';
+    meta.textContent = sc.enabled
+      ? `最多 ${sc.maxBots} · 约每 ${Math.round((sc.intervalMs || 0) / 60000)} 分钟 · 入场≥${Math.round((sc.scoreIn || 0) * 100)}分 · 持有≥${Math.round((sc.minHoldMs || 0) / 3600000)}h · 上次 ${ago}`
+      : '已关闭';
+  }
+  if (st) {
+    const run = (sc.running || []).join(', ') || '无';
+    st.textContent = sc.lastError
+      ? `⚠ ${sc.lastError}`
+      : `运行中 ${ (sc.running || []).length }/${sc.maxBots}：${run}`;
+  }
+  if (pool) {
+    const rows = (sc.pool || []).slice(0, 8);
+    pool.innerHTML = rows.length
+      ? rows.map((r, i) =>
+          `${i + 1}. <b>${r.symbol}</b> 分${(r.score * 100).toFixed(0)}`
+          + (r.trend ? ` · ${r.trend}/${r.recommended}` : '')
+          + (r.atrPct != null ? ` · ATR${r.atrPct}%` : '')
+          + ` <span class="muted">${r.why || ''}</span>`
+        ).join('<br>')
+      : '候选池为空（等待巡检或行情未就绪）';
+  }
+  if (acts) {
+    const a = (sc.actions || [])[0];
+    acts.textContent = a ? `最近：${a.type} ${a.symbol || ''} ${a.reason || ''}` : '';
+  }
+}
+
+async function scoutRun(btn) {
+  const old = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '巡检中…'; }
+  try {
+    const r = await fetch('/api/scout/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    renderScout(j.ok ? { ...(await (await fetch('/api/scout')).json()) } : j);
+    await bootstrap();
+  } catch (e) {
+    alert('选币巡检失败：' + e.message);
+  }
+  if (btn) { btn.disabled = false; btn.textContent = old; }
 }
 
 // ── IP 配置 ─────────────────────────────────────────────────────────────────
