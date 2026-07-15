@@ -1,6 +1,6 @@
 # Next K 网格（Bitget）
 
-源码目录：`vendor/wangge`（实现名；产品面统称 **Next K**）。只保留 **Bitget** USDT 永续。
+源码目录名仍为 `vendor/wangge`（部署路径未改）；产品面统称 **Next K**。只保留 **Bitget** USDT 永续。
 
 ## 模型
 
@@ -8,7 +8,7 @@
 |----|------|
 | 交易所 | 仅 Bitget（共享账户） |
 | 选币官 | 自维护候选池；按成交额+ATR+趋势打分；**最多 5 个**机器人自动开停 |
-| 托管 | 启动后 EMA/ATR 自动调区间/换向（paper/live 同规则） |
+| 托管 | 启动后 EMA/ATR 自动调区间；强信号可换向；**做多/做空遇强震荡（≥约45%）自动切回中性**（paper/live 同规则） |
 | 模式 | `BG_MODE=paper` / `live` |
 
 ## 无干预

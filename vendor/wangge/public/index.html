@@ -552,27 +552,20 @@ function isPublicTab(name) {
 }
 
 function consoleUnlocked() {
-  try {
-    return sessionStorage.getItem(CONSOLE_UNLOCK_KEY) === '1'
-      || sessionStorage.getItem('wangge_console_ok') === '1';
-  } catch { return false; }
+  try { return sessionStorage.getItem(CONSOLE_UNLOCK_KEY) === '1'; } catch { return false; }
 }
 
 function requireConsolePass() {
   if (consoleUnlocked()) return true;
   let expect = CONSOLE_PASS_DEFAULT;
   try {
-    const o = localStorage.getItem('nextk_console_pass')
-      || localStorage.getItem('wangge_console_pass');
+    const o = localStorage.getItem('nextk_console_pass');
     if (o != null && String(o).length) expect = String(o);
   } catch { /* */ }
   const got = window.prompt('进入标的控制台需要密码：');
   if (got === null) return false;
   if (got === expect) {
-    try {
-      sessionStorage.setItem(CONSOLE_UNLOCK_KEY, '1');
-      sessionStorage.removeItem('wangge_console_ok');
-    } catch { /* */ }
+    try { sessionStorage.setItem(CONSOLE_UNLOCK_KEY, '1'); } catch { /* */ }
     return true;
   }
   alert('密码错误');
@@ -1026,6 +1019,19 @@ function makeExchangeCtrl(sym) {
       ? `<span class="badge badge-run">运行中（${modeLabel(s.config?.mode)}）</span>`
         + (s.autopilot?.enabled ? ' <span class="badge badge-paper" style="margin-left:6px">自动托管</span>' : '')
       : '<span class="badge badge-stop">未运行</span>';
+    // Keep mode/range controls in sync with the live bot (scout may start long/short).
+    if (s.config) {
+      const m = s.config.mode;
+      if (m === 'long' || m === 'short' || m === 'neutral') setMode(m);
+      if (run) {
+        if (s.config.lower != null) P('lower').value = s.config.lower;
+        if (s.config.upper != null) P('upper').value = s.config.upper;
+        if (s.config.gridCount != null) P('grid-count').value = s.config.gridCount;
+        if (s.config.sizeBase != null) P('size-base').value = s.config.sizeBase;
+        if (s.config.leverage != null) P('leverage').value = s.config.leverage;
+        if (s.config.outOfRangeAction && P('auto-stop')) P('auto-stop').value = s.config.outOfRangeAction;
+      }
+    }
     if (P('autopilot-st')) {
       if (s.autopilot?.enabled) {
         const t = s.autopilot.lastTrend;

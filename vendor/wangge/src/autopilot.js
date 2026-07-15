@@ -108,21 +108,39 @@ export function decideAutopilot({ analysis, config, lastPrice, autopilot, now = 
     };
   }
 
-  // 2) Mild conflict on neutral→trend: prefer flip into trend if allowed
-  if (mildConflict && mode === 'neutral' && ap.allowFlip && (rec === 'long' || rec === 'short')) {
-    const sug = suggestFromTrend(analysis, { mode: rec, riskProfile: ap.riskProfile, gridCount: config.gridCount });
-    if (sug) {
-      return {
-        action: 'flip',
-        reason: `震荡转趋势（→${rec}，强度${pct(strength)}），自动切向`,
-        params: {
-          ...sug,
-          sizeBase: config.sizeBase,
-          leverage: config.leverage || sug.leverage,
-          outOfRangeAction: config.outOfRangeAction || 'recover',
-          marketId: config.marketId,
-        },
-      };
+  // 2) Mild conflict: enter or leave a directional grid when signal is strong enough
+  if (mildConflict && ap.allowFlip) {
+    if (mode === 'neutral' && (rec === 'long' || rec === 'short')) {
+      const sug = suggestFromTrend(analysis, { mode: rec, riskProfile: ap.riskProfile, gridCount: config.gridCount });
+      if (sug) {
+        return {
+          action: 'flip',
+          reason: `震荡转趋势（→${rec}，强度${pct(strength)}），自动切向`,
+          params: {
+            ...sug,
+            sizeBase: config.sizeBase,
+            leverage: config.leverage || sug.leverage,
+            outOfRangeAction: config.outOfRangeAction || 'recover',
+            marketId: config.marketId,
+          },
+        };
+      }
+    }
+    if ((mode === 'long' || mode === 'short') && rec === 'neutral') {
+      const sug = suggestFromTrend(analysis, { mode: 'neutral', riskProfile: ap.riskProfile, gridCount: config.gridCount });
+      if (sug) {
+        return {
+          action: 'flip',
+          reason: `趋势转震荡（${mode}→中性，强度${pct(strength)}），自动切回中性网格`,
+          params: {
+            ...sug,
+            sizeBase: config.sizeBase,
+            leverage: config.leverage || sug.leverage,
+            outOfRangeAction: config.outOfRangeAction || 'recover',
+            marketId: config.marketId,
+          },
+        };
+      }
     }
   }
 

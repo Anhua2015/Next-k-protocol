@@ -132,7 +132,7 @@ app.include_router(router)
 from routers.metrics import router as metrics_router
 app.include_router(metrics_router)
 
-logger.info("Routes: /api/binance/* | Wangge UI+API proxied on /")
+logger.info("Routes: /api/binance/* | Next K grid UI+API proxied on /")
 logger.info("Swagger: http://0.0.0.0:%d/docs", PORT)
 logger.info("Binance health: http://0.0.0.0:%d/api/binance/health", PORT)
 
