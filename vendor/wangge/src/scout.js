@@ -395,26 +395,32 @@ export function createScout(ctx) {
         }
       }
 
-      let seeded = occupied.length > 0 || active.length > 0;
+      // Cold bootstrap: empty fleet → one scan fills up to maxBots among scoreIn.
+      // Once any bot is live, new entries need confirmEntries consecutive passes.
+      const bootstrap = active.length === 0 && occupied.length === 0;
+      const needConfirm = bootstrap ? 1 : state.confirmEntries;
       for (const row of pool) {
         if (slots <= 0) break;
         if (row.score < state.scoreIn) break;
-        const needConfirm = seeded ? state.confirmEntries : 1;
         if ((state.entryStreak[row.symbol] || 0) < needConfirm) continue;
         if (fleet.get(row.symbol)?.running) continue;
         try {
           if (!fleet.get(row.symbol)) {
             if (fleet.list().length >= state.maxBots) {
-              const idle = fleet.list().find((s) => !fleet.get(s)?.running);
+              const idle = fleet.list().find((s) => !fleet.get(s)?.running && !state.openedAt[s]);
               if (idle) await closeBot(idle, { remove: true });
               if (fleet.list().length >= state.maxBots) continue;
             }
           }
           await openBot(row);
-          pushAction({ type: 'open', symbol: row.symbol, score: row.score, reason: (row.why || '') + ' · 确认×' + needConfirm });
+          pushAction({
+            type: 'open',
+            symbol: row.symbol,
+            score: row.score,
+            reason: (row.why || '') + (bootstrap ? ' · 冷启动' : ' · 确认×' + needConfirm),
+          });
           log('[选币] 开仓托管 ' + row.symbol + '（分 ' + row.score + ' · ' + row.why + '）');
           slots -= 1;
-          seeded = true;
         } catch (e) {
           pushAction({ type: 'open-fail', symbol: row.symbol, reason: e?.message || String(e) });
           log('[选币] 打开 ' + row.symbol + ' 失败: ' + (e?.message || e));

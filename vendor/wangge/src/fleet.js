@@ -19,7 +19,7 @@ export function marketMatches(m, sym) {
  * @param {object} exchange shared Bitget adapter
  * @param {string[]} initialSymbols
  */
-export function createFleet(exchange, initialSymbols = ['BTCUSDT']) {
+export function createFleet(exchange, initialSymbols = []) {
   const bots = new Map();
 
   function ensure(symbol) {
@@ -37,10 +37,10 @@ export function createFleet(exchange, initialSymbols = ['BTCUSDT']) {
     return bot;
   }
 
-  for (const s of initialSymbols) {
+  for (const s of initialSymbols || []) {
     try { ensure(s); } catch { /* skip */ }
   }
-  if (!bots.size) ensure('BTCUSDT');
+  // Empty fleet is OK — scout / UI adds symbols.
 
   return {
     exchange,

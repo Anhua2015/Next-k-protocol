@@ -70,13 +70,19 @@ const exchange = createExchange(cfg.bg);
 const fleet = createFleet(exchange, cfg.bg.symbols);
 
 {
+  // Resume only running bots from snapshots when BG_SYMBOLS is empty / incomplete.
   const state = loadState();
   for (const key of Object.keys(state)) {
     if (!key.startsWith('sym_')) continue;
     const sym = key.slice(4);
     if (fleet.get(sym)) continue;
-    if (state[key]?.running) {
-      console.warn(`[警告] 快照 ${key} 仍标记 running，但不在 BG_SYMBOLS 中 — 交易所上可能仍有挂单，请手动处理`);
+    const snap = state[key];
+    if (!snap?.running) continue;
+    try {
+      fleet.add(sym);
+      console.log(`[恢复] 从快照装入运行中的 ${sym}`);
+    } catch (e) {
+      console.warn(`[警告] 无法装入快照 ${key}: ` + (e?.message || e));
     }
   }
 }

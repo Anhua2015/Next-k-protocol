@@ -57,7 +57,12 @@ export function getConfig() {
     marginMode: (process.env.BITGET_MARGIN_MODE || 'crossed').toLowerCase(),
     startBalance: Number(process.env.PAPER_BALANCE || 15000),
     proxy: process.env.BITGET_PROXY || globalProxy,
-    symbols: parseSymbols(process.env.BG_SYMBOLS || process.env.BITGET_SYMBOLS || 'BTCUSDT'),
+    // Empty = rely on scout / UI to populate (no seed BTCUSDT).
+    symbols: parseSymbols(
+      process.env.BG_SYMBOLS != null
+        ? process.env.BG_SYMBOLS
+        : (process.env.BITGET_SYMBOLS || ''),
+    ),
   };
 
   return {
