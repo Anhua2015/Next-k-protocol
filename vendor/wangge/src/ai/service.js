@@ -8,8 +8,22 @@
 import { aiChat, extractJson, notify, getAiConfig } from './provider.js';
 import { analyzeTrend } from '../trend.js';
 import { loadSnapshot, saveSnapshot } from '../persist.js';
+import { normalizeSymbol } from '../config.js';
 
-const EXNAMES = { de: 'Decibel', ex: 'Extended', rs: 'RISEx', bg: 'Bitget' };
+function exLabel(key) {
+  return String(key || '').toUpperCase();
+}
+
+function matchMarket(markets, symbolKey) {
+  const sym = normalizeSymbol(symbolKey);
+  if (!sym || !Array.isArray(markets)) return null;
+  return markets.find((x) => {
+    const name = normalizeSymbol(x.name || x.displayName || '');
+    const disp = normalizeSymbol(x.displayName || '');
+    const base = String(x.symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return name === sym || disp === sym || (base && (base + 'USDT') === sym) || base === sym;
+  }) || null;
+}
 
 export function createAiService({ bots, exchanges }) {
   return new AiService(bots, exchanges);
@@ -17,8 +31,8 @@ export function createAiService({ bots, exchanges }) {
 
 class AiService {
   constructor(bots, exchanges) {
-    this.bots = bots;             // { de, ex, rs, bg } -> GridBot
-    this.exchanges = exchanges;   // { de, ex, rs, bg } -> adapter
+    this.bots = bots;             // { BTCUSDT: GridBot, ... }
+    this.exchanges = exchanges;   // same keys -> shared Bitget
     this.sentinel = null;         // 最近一次巡检 {t, level, summary, detail, advice}
     this.sentinelHistory = [];    // 最近 20 条
     this.sentinelError = null;
@@ -81,10 +95,10 @@ class AiService {
   // ---------- 状态快照（喂给 AI 的紧凑上下文） ----------
   _snapshot() {
     const out = {};
-    for (const key of ['de', 'ex', 'rs', 'bg']) {
+    for (const key of Object.keys(this.bots)) {
       const s = this.bots[key].getState();
       out[key] = {
-        exchange: EXNAMES[key], tradeMode: s.mode,
+        exchange: exLabel(key), tradeMode: s.mode,
         running: s.running, recovery: s.recovery,
         market: s.config?.displayName ?? null,
         health: s.health ? { status: s.health.status, reason: s.health.reason } : null,
@@ -111,16 +125,20 @@ class AiService {
     this._busy.sentinel = true;
     try {
       const snap = this._snapshot();
+      const keys = Object.keys(snap);
+      const perExample = keys.length
+        ? keys.map((k) => `"${k}":{"level":"ok|warn|critical","summary":"该标的结论(中文,50字内)","advice":"操作建议(中文,无则空)"}`).join(',')
+        : '"BTCUSDT":{"level":"ok","summary":"未运行","advice":""}';
       const text = await aiChat({
         small: true, json: true, maxTokens: 900, temperature: 0.1,
         system: [
-          '你是四交易所网格交易机器人的风控值守 AI。根据状态快照，对每个交易所分别给出巡检结论，并给一句整体结论。',
+          '你是 Bitget 多标的网格的风控值守 AI。根据状态快照，对每个标的分别给出巡检结论，并给一句整体结论。',
           '重点关注：health.status 为 error/warn 及其 reason；trackedOrders 与 exchangeOpenOrders 明显不一致（挂单同步漂移）；',
           '保证金/权益吃紧（未实现亏损占权益比例大、returnPct 恶化）；outOfRange=true（价格冲出网格区间）；',
           '告警里的关键词（保证金不足、频繁取消、未确认成交、接口异常、暂停补单）；数据长时间未更新。',
-          '注意：paper 是模拟盘，问题降级处理；未运行的交易所 level 用 ok、summary 写"未运行"即可。回复 JSON：',
-          '{"overall":{"level":"ok|warn|critical","summary":"整体一句话(中文)"},',
-          '"per":{"de":{"level":"ok|warn|critical","summary":"该所结论(中文,50字内)","advice":"操作建议(中文,无则空)"},"ex":{...},"rs":{...},"bg":{...}}}',
+          '注意：paper 是模拟盘，问题降级处理；未运行的标的 level 用 ok、summary 写"未运行"即可。回复 JSON：',
+          `{"overall":{"level":"ok|warn|critical","summary":"整体一句话(中文)"},"per":{${perExample}}}`,
+          `per 的键必须是快照里的标的代码：${keys.join(', ') || 'BTCUSDT'}。`,
         ].join('\n'),
         messages: [{ role: 'user', content: '状态快照：\n' + JSON.stringify(snap) }],
       });
@@ -142,7 +160,7 @@ class AiService {
         const perTxt = this.sentinel.per
           ? Object.entries(this.sentinel.per)
               .filter(([, v]) => v && v.level && v.level !== 'ok')
-              .map(([k, v]) => `${EXNAMES[k]}：${v.summary}${v.advice ? `（建议：${v.advice}）` : ''}`)
+              .map(([k, v]) => `${exLabel(k)}：${v.summary}${v.advice ? `（建议：${v.advice}）` : ''}`)
               .join('\n')
           : this.sentinel.detail;
         notify(`【网格机器人·${lv === 'critical' ? '严重' : '注意'}】${this.sentinel.summary}\n${perTxt}`).catch(() => {});
@@ -158,7 +176,7 @@ class AiService {
   // ---------- 2) 每日复盘 ----------
   _rebaseline() {
     const per = {};
-    for (const key of ['de', 'ex', 'rs', 'bg']) {
+    for (const key of Object.keys(this.bots)) {
       const s = this.bots[key].getState();
       per[key] = { equity: s.equity, realizedPnl: s.realizedPnl, completedRungs: s.stats?.completedRungs || 0, volume: s.volume || 0 };
     }
@@ -173,7 +191,7 @@ class AiService {
       const snap = this._snapshot();
       const base = this._baseline;
       const diff = {};
-      for (const key of ['de', 'ex', 'rs', 'bg']) {
+      for (const key of Object.keys(this.bots)) {
         const b = base?.per?.[key] || {};
         const s = snap[key];
         diff[key] = {
@@ -188,9 +206,9 @@ class AiService {
         json: false, maxTokens: 1200, temperature: 0.4,
         system: [
           '你是网格交易机器人的复盘分析师。用简洁的中文写一份运行日报（纯文本，不用 markdown 标题符号）。',
-          '内容：1)各所各自的盈亏归因（网格已实现 vs 持仓浮动）；2)成交活跃度与网格参数是否匹配（完成格数、间距）；',
+          '内容：1)各标的各自的盈亏归因（网格已实现 vs 持仓浮动）；2)成交活跃度与网格参数是否匹配（完成格数、间距）；',
           '3)风险点（保证金、区间边缘、挂单异常）；4)下一步的 1-3 条可执行建议。',
-          '数字保留两位小数；paper 为模拟盘要注明；没跑的交易所一句话带过。总长 300 字以内。',
+          '数字保留两位小数；paper 为模拟盘要注明；没跑的标的一句话带过。总长 300 字以内。',
         ].join('\n'),
         messages: [{ role: 'user', content: `统计周期：${sinceHrs != null ? '近 ' + sinceHrs + ' 小时' : '本期'}\n当前快照：${JSON.stringify(snap)}\n周期增量：${JSON.stringify(diff)}` }],
       });
@@ -231,47 +249,47 @@ class AiService {
       ].join('\n'),
       messages: [{
         role: 'user',
-        content: `交易所：${EXNAMES[key]}；市场：${market?.displayName}；当前价：${price}\n多周期指标：${JSON.stringify(frames)}`
+        content: `标的：${exLabel(key)}；市场：${market?.displayName}；当前价：${price}\n多周期指标：${JSON.stringify(frames)}`
           + (ctx.gridCfg ? `\n当前网格（若在跑）：${JSON.stringify(ctx.gridCfg)}；运行中：${ctx.running}` : ''),
       }],
     });
     const j = extractJson(text);
     if (!j) throw new Error('AI 返回无法解析：' + text.slice(0, 150));
-    return { t: Date.now(), source: EXNAMES[key], market: market?.displayName, price, frames, ...j };
+    return { t: Date.now(), source: exLabel(key), market: market?.displayName, price, frames, ...j };
   }
 
-  /** 按需触发：分析某交易所当前配置的市场。 */
+  /** 按需触发：分析某标的对应市场。 */
   async analyze(key) {
     const bot = this.bots[key], ex = this.exchanges[key];
-    if (!bot || !ex) throw new Error('未知交易所: ' + key);
+    if (!bot || !ex) throw new Error('未知标的: ' + key);
     let marketId = bot.config?.marketId;
-    if (marketId == null) marketId = (await ex.getMarkets())[0]?.marketId;
-    if (marketId == null) throw new Error('该交易所没有可分析的市场。');
+    if (marketId == null) {
+      const m = matchMarket(await ex.getMarkets(), key);
+      marketId = m?.marketId;
+    }
+    if (marketId == null) throw new Error('该标的没有可分析的市场。');
     const st = bot.getState();
     return this._regime(key, marketId, { gridCfg: st.config, running: st.running });
   }
 
-  /** 定时 BTC 市况报告：自动挑一个有真实行情的交易所做数据源。 */
+  /** 定时 BTC 市况报告：用共享 Bitget 行情。 */
   async runMarketAnalysis() {
     if (this._busy.market) return this.market;
     this._busy.market = true;
     try {
       let src = null, marketId = null;
-      for (const key of ['ex', 'de', 'rs', 'bg']) {
-        const ex = this.exchanges[key];
-        if (ex.dataSource !== 'real') continue; // 合成行情分析没有意义
-        try {
-          const ms = await ex.getMarkets();
-          const m = ms.find((x) => {
-            const sym = String(x.symbol || '').toUpperCase();
-            const name = String(x.displayName || x.name || '').toUpperCase();
-            // Bitget: symbol=BTC, displayName=BTCUSDT；其它所: BTC-PERP / BTC-USD
-            return sym === 'BTC' || name === 'BTCUSDT' || /^BTC([-_/]|$)/.test(name);
-          });
-          if (m) { src = key; marketId = m.marketId; break; }
-        } catch { /* 换下一个所 */ }
-      }
-      if (!src) throw new Error('没有可用的真实行情来源（各所均未连接或没有 BTC 市场）。');
+      const keys = Object.keys(this.bots);
+      const ex = keys.length ? this.exchanges[keys[0]] : null;
+      if (!ex || (ex.dataSource !== 'real' && ex.dataSource !== 'synthetic')) throw new Error('没有可用的行情来源（Bitget 未连接）。');
+      const ms = await ex.getMarkets();
+      const m = ms.find((x) => {
+        const base = String(x.symbol || '').toUpperCase();
+        const name = String(x.displayName || x.name || '').toUpperCase();
+        return base === 'BTC' || name === 'BTCUSDT';
+      }) || ms[0];
+      if (!m) throw new Error('没有可用市场。');
+      src = keys.find((k) => String(k).includes('BTC')) || keys[0];
+      marketId = m.marketId;
       this.market = await this._regime(src, marketId, {});
       this.marketError = null;
       this._save();
@@ -293,9 +311,9 @@ class AiService {
         '可用 action.type：adjust_range(params:{lower,upper}) | stop_grid(params:{closePosition:true/false}) |',
         'cancel_orders | close_position | reconnect | start_recovery(params:{aboveEntryOnly}) |',
         'start_grid(params:{marketId,mode,lower,upper,gridCount,sizeBase,leverage,outOfRangeAction}) | none',
-        'action.exchange 取 de|ex|rs|bg。一次最多提议一个 action；用户没有明确要操作时 type 用 none。',
+        'action.exchange 取标的代码（如 BTCUSDT）。一次最多提议一个 action；用户没有明确要操作时 type 用 none。',
         '涉及平仓/停止等不可逆操作时，在 reply 里先说明后果。',
-        '回复 JSON：{"reply":"给用户的中文回复","action":{"type":"none","exchange":"de","params":{}}}',
+        '回复 JSON：{"reply":"给用户的中文回复","action":{"type":"none","exchange":"BTCUSDT","params":{}}}',
       ].join('\n'),
       messages: [
         ...history.slice(-8).map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content).slice(0, 2000) })),
@@ -307,14 +325,25 @@ class AiService {
     // 白名单过滤：任何未知 action 一律置为 none
     const ALLOWED = ['adjust_range', 'stop_grid', 'cancel_orders', 'close_position', 'reconnect', 'start_recovery', 'start_grid', 'none'];
     if (!j.action || !ALLOWED.includes(j.action.type)) j.action = { type: 'none' };
-    if (j.action.type !== 'none' && !['de', 'ex', 'rs', 'bg'].includes(j.action.exchange)) j.action = { type: 'none' };
+    if (j.action.type !== 'none') {
+      const raw = String(j.action.exchange || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const LEGACY = new Set(['BG', 'BITGET', 'DE', 'EX', 'RS', 'BGUSDT', 'BITGETUSDT', 'DEUSDT', 'EXUSDT', 'RSUSDT']);
+      let exKey;
+      if (!raw || LEGACY.has(raw)) {
+        exKey = Object.keys(this.bots).find((k) => k.includes('BTC')) || Object.keys(this.bots)[0] || '';
+      } else {
+        exKey = normalizeSymbol(raw);
+      }
+      j.action.exchange = exKey;
+      if (!exKey || !this.bots[exKey]) j.action = { type: 'none' };
+    }
     return { reply: j.reply || '', action: j.action };
   }
 
   // ---------- 5) 出区间建议（跳变触发） ----------
   async _checkOutOfRange() {
     const cfg = getAiConfig();
-    for (const key of ['de', 'ex', 'rs', 'bg']) {
+    for (const key of Object.keys(this.bots)) {
       const bot = this.bots[key];
       const cur = !!(bot.running && bot.outOfRange);
       const prev = !!this._prevOor[key];
@@ -346,7 +375,7 @@ class AiService {
     const j = extractJson(text);
     if (!j) return;
     this.oorAdvice[key] = { t: Date.now(), ...j };
-    notify(`【网格机器人·出区间】${EXNAMES[key]} ${st.config?.displayName} 价格冲出区间（现价 ${st.lastPrice}）。\nAI 建议：${j.suggestionText || j.suggestion}\n理由：${j.reasoning || ''}\n（已配置的自动策略正在执行，此建议供复核）`).catch(() => {});
+    notify(`【网格机器人·出区间】${exLabel(key)} ${st.config?.displayName} 价格冲出区间（现价 ${st.lastPrice}）。\nAI 建议：${j.suggestionText || j.suggestion}\n理由：${j.reasoning || ''}\n（已配置的自动策略正在执行，此建议供复核）`).catch(() => {});
   }
 
   // ---------- 状态/测试 ----------

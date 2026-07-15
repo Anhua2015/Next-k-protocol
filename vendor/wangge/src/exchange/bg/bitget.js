@@ -1,6 +1,6 @@
 // BitgetExchange: LIVE adapter for Bitget USDT-M futures (API v2).
 // Zero external deps beyond Node crypto + fetch. Fills detected by polling
-// pending orders (same pattern as Extended/RISEx).
+// pending orders.
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 
@@ -517,9 +517,12 @@ export class BitgetExchange extends EventEmitter {
       const rows = Array.isArray(data) ? data : [];
       const usdt = rows.find((a) => String(a.marginCoin || a.coin || '').toUpperCase() === 'USDT') || rows[0];
       if (usdt) {
-        this.balance = Number(usdt.available ?? usdt.crossedMaxAvailable ?? usdt.availableEquity ?? 0);
-        this.equity = Number(usdt.accountEquity ?? usdt.usdtEquity ?? usdt.equity ?? this.balance);
-        this.realizedPnl = usdt.realizedPL != null ? Number(usdt.realizedPL) : this.realizedPnl;
+        const bal = Number(usdt.available ?? usdt.crossedMaxAvailable ?? usdt.availableEquity ?? 0);
+        const eq = Number(usdt.accountEquity ?? usdt.usdtEquity ?? usdt.equity ?? bal);
+        if (Number.isFinite(bal)) this.balance = bal;
+        if (Number.isFinite(eq)) this.equity = eq;
+        const rp = usdt.realizedPL != null ? Number(usdt.realizedPL) : NaN;
+        if (Number.isFinite(rp)) this.realizedPnl = rp;
         this.lastOkAt = Date.now();
         return;
       }

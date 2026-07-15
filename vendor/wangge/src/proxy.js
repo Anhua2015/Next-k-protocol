@@ -1,11 +1,7 @@
-// 多交易所代理管理器
-// 支持 HTTP(S) 代理和 SOCKS5 代理（含认证）。
-// 因 Node.js fetch 使用统一全局 dispatcher，当三个交易所代理不同时，
-// 采用"最后配置生效"策略，并给出提示。推荐统一使用 GLOBAL_PROXY。
+/** Bitget-only proxy: GLOBAL_PROXY > BITGET_PROXY. */
 import net from 'node:net';
 import tls from 'node:tls';
 
-/** host:port:user:pass -> socks5://user:pass@host:port ; bare host:port -> http:// */
 export function normalizeProxy(v) {
   const s = String(v).trim();
   if (/^\w+:\/\//.test(s)) return s;
@@ -22,7 +18,6 @@ function masked(url) {
   return url.replace(/\/\/([^:@/]+):[^@/]+@/, '//$1:***@');
 }
 
-/** 完整 SOCKS5 握手（RFC 1928/1929） */
 export function socks5Connect({ host, port, user, pass }, destHost, destPort, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     const sock = net.connect({ host, port: Number(port) });
@@ -79,10 +74,6 @@ export function socks5Connect({ host, port, user, pass }, destHost, destPort, ti
   });
 }
 
-/**
- * 为指定代理 URL 创建 undici Dispatcher（Agent 或 ProxyAgent）。
- * 返回 dispatcher 实例，或 null（无代理/失败）。
- */
 export async function createDispatcher(proxyUrl) {
   if (!proxyUrl) return null;
   const proxy = normalizeProxy(proxyUrl);
@@ -118,34 +109,9 @@ export async function createDispatcher(proxyUrl) {
   }
 }
 
-/**
- * 根据三个交易所的代理配置，设置全局 dispatcher。
- * 优先级：全局代理 > Decibel > Extended > RISEx
- * 若三者代理不同，警告用户；若需独立代理，建议分开部署。
- */
 export async function setupProxies(cfg) {
-  const { globalProxy, de, ex, rs, bg } = cfg;
-
-  const proxies = {
-    global: globalProxy || '',
-    de: de.proxy || '',
-    ex: ex.proxy || '',
-    rs: rs.proxy || '',
-    bg: bg?.proxy || '',
-  };
-
-  // 选出实际要设置的代理（全局 > 各交易所）
-  const effective = proxies.global || proxies.de || proxies.ex || proxies.rs || proxies.bg;
-  if (!effective) return { de: null, ex: null, rs: null, bg: null, used: null };
-
-  // 检查是否有不同的代理
-  const uniqueProxies = new Set([proxies.de, proxies.ex, proxies.rs, proxies.bg].filter(Boolean));
-  if (uniqueProxies.size > 1 && !proxies.global) {
-    console.warn('[代理] ⚠ 检测到各交易所配置了不同代理，但 GLOBAL_PROXY 未设置。');
-    console.warn('[代理]   由于 Node.js 全局 fetch 限制，将统一使用第一个有效代理。');
-    console.warn('[代理]   如需严格隔离代理，请设置 GLOBAL_PROXY 或分开部署各交易所。');
-  }
-
+  const effective = cfg.globalProxy || cfg.bg?.proxy || '';
+  if (!effective) return { used: null };
   const normalized = normalizeProxy(effective);
   try {
     const { setGlobalDispatcher } = await import('undici');
@@ -160,7 +126,6 @@ export async function setupProxies(cfg) {
   return { used: null };
 }
 
-/** 验证代理是否可用，返回 { ok, ip } 或 { ok: false, error } */
 export async function checkProxy() {
   const urls = ['https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com'];
   let lastErr = 'unknown';

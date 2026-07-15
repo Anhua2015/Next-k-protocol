@@ -1,137 +1,135 @@
-// 四交易所整合服务器（含 Bitget）
-// 路由规则：
-//   /api/de/*  → Decibel 交易所
-//   /api/ex/*  → Extended 交易所
-//   /api/rs/*  → RISEx 交易所
-//   /api/bg/*  → Bitget 交易所
-//   /api/overview → 四交易所总览（余额+盈亏）
+// Bitget-only：共享账户 + 一标的一机器人
+//   /api/overview, /api/symbols, /api/s/:SYM/*, /api/exchange/*
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getConfig, ROOT } from './config.js';
-import { createExchange as createDeExchange } from './exchange/de/index.js';
-import { createExchange as createExExchange } from './exchange/ex/index.js';
-import { createExchange as createRsExchange } from './exchange/rs/index.js';
-import { createExchange as createBgExchange } from './exchange/bg/index.js';
-import { GridBot } from './bot.js';
+import { getConfig, ROOT, normalizeSymbol } from './config.js';
+import { createExchange } from './exchange/bg/index.js';
+import { createFleet, snapKey } from './fleet.js';
 import { analyzeTrend } from './trend.js';
 import { setupProxies, checkProxy } from './proxy.js';
-import { loadSnapshot, saveSnapshot } from './persist.js';
+import { loadSnapshot, saveSnapshot, deleteSnapshot, loadState } from './persist.js';
 import { createAiService } from './ai/service.js';
 
-// ── 启动配置 ─────────────────────────────────────────────────────────────────
 const cfg = getConfig();
 
-// ── 实盘凭据预检查：缺什么直接列出来，不甩堆栈吓人 ─────────────────────────────
 {
   const missing = [];
-  if (cfg.de.mode === 'live') {
-    if (!cfg.de.apiKey) missing.push(['Decibel ', 'DECIBEL_API_KEY', '在 geomi.dev 免费创建']);
-    if (!cfg.de.privateKey) missing.push(['Decibel ', 'DECIBEL_PRIVATE_KEY', '在 app.decibel.trade/api 创建 API 钱包']);
-  }
-  if (cfg.ex.mode === 'live') {
-    if (!cfg.ex.apiKey) missing.push(['Extended', 'EXTENDED_API_KEY', 'app.extended.exchange → API Management']);
-    if (!cfg.ex.vault) missing.push(['Extended', 'EXTENDED_VAULT', '同上，创建 API Key 时一并显示']);
-    if (!cfg.ex.starkPrivateKey) missing.push(['Extended', 'EXTENDED_STARK_PRIVATE_KEY', '同上，只显示一次务必保存']);
-  }
-  if (cfg.rs.mode === 'live') {
-    if (!cfg.rs.account) missing.push(['RISEx   ', 'ACCOUNT_ADDRESS', 'RISEx 应用的账户 / API 设置']);
-    if (!cfg.rs.signerKey) missing.push(['RISEx   ', 'SIGNER_PRIVATE_KEY', 'RISEx 应用的账户 / API 设置']);
-  }
   if (cfg.bg.mode === 'live') {
-    if (!cfg.bg.apiKey) missing.push(['Bitget  ', 'BITGET_API_KEY', 'Bitget → API 管理']);
-    if (!cfg.bg.apiSecret) missing.push(['Bitget  ', 'BITGET_API_SECRET', 'Bitget → API 管理']);
-    if (!cfg.bg.passphrase) missing.push(['Bitget  ', 'BITGET_PASSPHRASE', '创建 API 时设置的口令']);
+    if (!cfg.bg.apiKey) missing.push(['Bitget', 'BITGET_API_KEY', 'Bitget → API 管理']);
+    if (!cfg.bg.apiSecret) missing.push(['Bitget', 'BITGET_API_SECRET', 'Bitget → API 管理']);
+    if (!cfg.bg.passphrase) missing.push(['Bitget', 'BITGET_PASSPHRASE', '创建 API 时设置的口令']);
   }
   if (missing.length) {
-    console.error('\n[启动失败] 有交易所被设为 live 实盘模式，但 .env 里还缺以下凭据：\n');
+    console.error('\n[启动失败] Bitget 设为 live，但 .env 还缺凭据：\n');
     for (const [ex, key, where] of missing) {
       console.error(`  ${ex}  缺 ${key}`);
       console.error(`            获取方式：${where}`);
     }
-    console.error('\n解决办法（二选一）：');
-    console.error('  1. 用记事本打开项目里的 .env，补齐上面列出的字段');
-    console.error('     （详细获取教程见 README.md 第七节）');
-    console.error('  2. 暂时不实盘：把 .env 里对应的 DE_MODE / EX_MODE / RS_MODE / BG_MODE 改回 paper\n');
+    console.error('\n解决：补齐 .env，或把 BG_MODE 改回 paper\n');
     process.exit(1);
   }
 }
 
-// ── 代理设置 ─────────────────────────────────────────────────────────────────
 const proxyResult = await setupProxies(cfg);
 if (proxyResult.used) {
   console.log('[代理] 已启用: ' + proxyResult.used);
-  console.log('[代理检测] 正在验证代理可用性...');
   const chk = await checkProxy();
-  if (chk.ok) {
-    console.log('[代理检测] ✓ 代理正常，当前出口 IP: ' + chk.ip);
-  } else {
-    console.error('[代理检测] ✗ 代理无法联网：' + chk.error);
-    const hasLive = cfg.de.mode === 'live' || cfg.ex.mode === 'live' || cfg.rs.mode === 'live' || cfg.bg.mode === 'live';
-    if (hasLive) {
-      console.error('  实盘模式已中止启动，以免在断网状态下运行造成挂单失控。');
-      process.exit(1);
-    } else {
-      console.error('  模拟模式将继续运行，但可能拿不到真实行情。');
-    }
+  if (chk.ok) console.log('[代理检测] ✓ 出口 IP: ' + chk.ip);
+  else {
+    console.error('[代理检测] ✗ ' + chk.error);
+    if (cfg.bg.mode === 'live') process.exit(1);
   }
 } else {
-  console.log('[代理] 未配置（直连模式）');
+  console.log('[代理] 未配置（直连）');
 }
 
-// ── 创建三个交易所和机器人 ────────────────────────────────────────────────────
-const deExchange = createDeExchange(cfg.de);
-const exExchange = createExExchange(cfg.ex);
-const rsExchange = createRsExchange(cfg.rs);
-const bgExchange = createBgExchange(cfg.bg);
-
-const deBot = new GridBot(deExchange, { onChange: (s) => saveSnapshot('de', s) });
-const exBot = new GridBot(exExchange, { onChange: (s) => saveSnapshot('ex', s) });
-const rsBot = new GridBot(rsExchange, { onChange: (s) => saveSnapshot('rs', s) });
-const bgBot = new GridBot(bgExchange, { onChange: (s) => saveSnapshot('bg', s) });
-
-// Restore cumulative stats / config from the previous run (display continuity).
-// Trading does NOT auto-resume; stray-order cleanup happens after each exchange
-// finishes init (see below).
-deBot.restore(loadSnapshot('de'));
-exBot.restore(loadSnapshot('ex'));
-rsBot.restore(loadSnapshot('rs'));
-bgBot.restore(loadSnapshot('bg'));
-
-// Belt-and-suspenders: ensure every exchange always has an 'error' listener so a
-// stray emit can never crash the process (the GridBot also attaches one).
-for (const ex of [deExchange, exExchange, rsExchange, bgExchange]) {
-  ex.on('error', (e) => { try { console.error('[交易所错误] ' + (e?.message || e)); } catch {} });
+const exchange = createExchange(cfg.bg);
+{
+  // Migrate legacy single-slot snapshot `bg` → sym_<SYMBOL>
+  const legacy = loadSnapshot('bg');
+  if (legacy) {
+    const fromCfg = normalizeSymbol(
+      legacy.config?.displayName || legacy.config?.name || legacy.config?.symbol || 'BTCUSDT',
+    ) || 'BTCUSDT';
+    const target = snapKey(fromCfg);
+    if (!loadSnapshot(target)) {
+      saveSnapshot(target, legacy);
+      console.log(`[迁移] 旧快照 bg → ${target}`);
+      if (!cfg.bg.symbols.includes(fromCfg)) {
+        cfg.bg.symbols = [...cfg.bg.symbols, fromCfg];
+        console.log(`[迁移] 已把 ${fromCfg} 并入启动标的列表`);
+      }
+    }
+    try { deleteSnapshot('bg'); } catch {}
+  }
 }
 
-// ── AI 服务（哨兵/日报/分析/对话/出区间建议）────────────────────────────────
+const fleet = createFleet(exchange, cfg.bg.symbols);
+
+{
+  const state = loadState();
+  for (const key of Object.keys(state)) {
+    if (!key.startsWith('sym_')) continue;
+    const sym = key.slice(4);
+    if (fleet.get(sym)) continue;
+    if (state[key]?.running) {
+      console.warn(`[警告] 快照 ${key} 仍标记 running，但不在 BG_SYMBOLS 中 — 交易所上可能仍有挂单，请手动处理`);
+    }
+  }
+}
+
+function fleetProxy(getter) {
+  return new Proxy({}, {
+    get(_t, key) {
+      if (typeof key !== 'string') return undefined;
+      return getter(normalizeSymbol(key) || key);
+    },
+    ownKeys() { return fleet.list(); },
+    getOwnPropertyDescriptor(_t, key) {
+      if (typeof key !== 'string') return undefined;
+      const sym = normalizeSymbol(key) || key;
+      if (!getter(sym)) return undefined;
+      return { enumerable: true, configurable: true, value: getter(sym) };
+    },
+    has(_t, key) {
+      return typeof key === 'string' && !!getter(normalizeSymbol(key) || key);
+    },
+  });
+}
+
 const aiService = createAiService({
-  bots: { de: deBot, ex: exBot, rs: rsBot, bg: bgBot },
-  exchanges: { de: deExchange, ex: exExchange, rs: rsExchange, bg: bgExchange },
+  bots: fleetProxy((sym) => fleet.get(sym)),
+  exchanges: fleetProxy((sym) => (fleet.get(sym) ? exchange : null)),
 });
 aiService.start();
 
-// SSE 客户端集合（按交易所分组）
-const deClients = new Set();
-const exClients = new Set();
-const rsClients = new Set();
-const bgClients = new Set();
+exchange.on('error', (e) => {
+  try { console.error('[Bitget] ' + (e?.message || e)); } catch {}
+  for (const sym of fleet.list()) {
+    const bot = fleet.get(sym);
+    if (bot?.running) {
+      try { bot._handleExError(e); } catch {}
+    }
+  }
+});
 
-// ── 工具函数 ──────────────────────────────────────────────────────────────────
+const streamClients = new Map();
 const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript',
-  '.css': 'text/css',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.json': 'application/json',
-  '.woff2': 'font/woff2',
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
+  '.json': 'application/json', '.woff2': 'font/woff2',
 };
 
+function jsonReplacer(_k, v) {
+  if (typeof v === 'bigint') return v.toString();
+  if (typeof v === 'number' && !Number.isFinite(v)) return null;
+  return v;
+}
+
 function send(res, code, obj) {
-  const body = JSON.stringify(obj, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
-  if (res.headersSent) { try { res.end(); } catch { /* ignore */ } return; }
+  const body = JSON.stringify(obj, jsonReplacer);
+  if (res.headersSent) { try { res.end(); } catch {} return; }
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(body);
 }
@@ -142,177 +140,225 @@ function readBody(req, maxBytes = 1_000_000) {
     req.on('data', (c) => {
       if (done) return;
       n += c.length;
-      if (n > maxBytes) { done = true; try { req.destroy(); } catch { /* ignore */ } resolve({}); return; }
+      if (n > maxBytes) { done = true; try { req.destroy(); } catch {} resolve({}); return; }
       b += c;
     });
     req.on('end', () => { if (done) return; done = true; try { resolve(b ? JSON.parse(b) : {}); } catch { resolve({}); } });
   });
 }
 
-// ── 交易所路由处理器工厂 ───────────────────────────────────────────────────────
-function makeExchangeHandler(prefix, bot, exchange, exCfg, clients, name) {
-  return async (req, res, subPath, url) => {
-    if (subPath === '/markets') {
+function pick(s, mode) {
+  return {
+    running: s.running, mode, balance: s.balance, equity: s.equity,
+    totalPnl: s.totalPnl, realizedPnl: s.realizedPnl, unrealizedPnl: s.unrealizedPnl,
+    returnPct: s.returnPct, volume: s.volume,
+    completedRungs: s.stats?.completedRungs ?? 0,
+    openOrders: s.openOrders ?? 0, exchangeOpenOrders: s.exchangeOpenOrders ?? null,
+    outOfRange: s.outOfRange ?? false, health: s.health ?? null,
+    lastPrice: s.lastPrice, config: s.config,
+  };
+}
+
+function buildOverview() {
+  const symbols = {};
+  for (const sym of fleet.list()) {
+    const bot = fleet.get(sym);
+    if (bot) symbols[sym] = pick(bot.getState(), cfg.bg.mode);
+  }
+  return {
+    exchange: 'Bitget', mode: cfg.bg.mode, network: cfg.bg.network,
+    dataSource: exchange.dataSource || null,
+    sharedAccount: true,
+    symbols,
+  };
+}
+
+function persistSymbolsEnv() {
+  const list = fleet.list().join(',');
+  const envFile = path.join(ROOT, '.env');
+  let content = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
+  let wrote = false;
+  for (const key of ['BG_SYMBOLS', 'BITGET_SYMBOLS']) {
+    const regex = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
+    if (regex.test(content)) {
+      content = content.replace(regex, `${key}=${list}`);
+      wrote = true;
+    }
+  }
+  if (!wrote) content = content.trimEnd() + `\nBG_SYMBOLS=${list}\n`;
+  fs.writeFileSync(envFile, content, 'utf8');
+  process.env.BG_SYMBOLS = list;
+}
+
+async function handleSymbolApi(req, res, sym, subPath, url) {
+  const bot = fleet.get(sym);
+  if (!bot) return send(res, 404, { error: '标的不存在: ' + sym });
+
+  if (subPath === '/markets') {
+    const all = await exchange.getMarkets();
+    const mine = all.filter((x) => fleet.marketMatches(x, sym));
+    return send(res, 200, {
+      exchange: 'Bitget', symbol: sym, mode: cfg.bg.mode,
+      dataSource: exchange.dataSource || (cfg.bg.mode === 'live' ? 'real' : 'synthetic'),
+      network: exchange.network || cfg.bg.network,
+      apiUrl: exchange.apiUrl || cfg.bg.apiUrl,
+      markets: mine, locked: true, sharedAccount: true,
+    });
+  }
+
+  if (subPath === '/trend') {
+    let marketId = Number(url.searchParams.get('marketId') || 0);
+    if (!marketId) {
+      const m = await fleet.resolveMarket(sym);
+      if (m) marketId = m.marketId;
+    }
+    const intervalSec = Number(url.searchParams.get('intervalSec') || 3600);
+    let candles = [];
+    try { candles = await exchange.getCandles(marketId, intervalSec, 200); } catch {}
+    let price = null;
+    try { price = await exchange.getPrice(marketId); } catch {}
+    const analysis = (candles && candles.length >= 20)
+      ? analyzeTrend(candles)
+      : { trend: 'range', recommended: 'neutral', strength: 0, atrPct: null, price,
+        detail: '暂时拿不到足够K线，可手动设区间后启动。' };
+    return send(res, 200, { analysis, candles: (candles || []).slice(-120), marketId });
+  }
+
+  if (subPath === '/state') return send(res, 200, bot.getState());
+
+  if (subPath === '/start' && req.method === 'POST') {
+    try {
+      const body = await readBody(req);
+      const m = await fleet.resolveMarket(sym);
+      if (!m) throw new Error('找不到市场: ' + sym);
+      body.marketId = m.marketId;
+      return send(res, 200, await bot.start(body));
+    } catch (e) { return send(res, 400, { error: e.message }); }
+  }
+  if (subPath === '/stop' && req.method === 'POST') {
+    try { return send(res, 200, await bot.stop(await readBody(req))); }
+    catch (e) { return send(res, 400, { error: e.message }); }
+  }
+  if (subPath === '/adjust' && req.method === 'POST') {
+    try { return send(res, 200, await bot.adjustRange(await readBody(req))); }
+    catch (e) { return send(res, 400, { error: e.message }); }
+  }
+  if (subPath === '/reset' && req.method === 'POST') {
+    try { return send(res, 200, await bot.resetStats()); }
+    catch (e) { return send(res, 400, { error: e.message }); }
+  }
+  if (subPath === '/cancel-orders' && req.method === 'POST') {
+    try { return send(res, 200, await bot.cancelAllOrders()); }
+    catch (e) { return send(res, 400, { error: e.message }); }
+  }
+  if (subPath === '/start-recovery' && req.method === 'POST') {
+    try {
+      const body = await readBody(req);
+      const m = await fleet.resolveMarket(sym);
+      if (m) body.marketId = m.marketId;
+      return send(res, 200, await bot.startRecovery(body));
+    } catch (e) { return send(res, 400, { error: e.message }); }
+  }
+  if (subPath === '/close-position' && req.method === 'POST') {
+    try {
+      const m = await fleet.resolveMarket(sym);
+      return send(res, 200, await bot.closePositionNow(m?.marketId));
+    } catch (e) { return send(res, 400, { error: e.message }); }
+  }
+
+  if (subPath === '/stream') {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    res.write(`data: ${JSON.stringify(bot.getState())}\n\n`);
+    if (!streamClients.has(sym)) streamClients.set(sym, new Set());
+    streamClients.get(sym).add(res);
+    req.on('close', () => streamClients.get(sym)?.delete(res));
+    return;
+  }
+
+  send(res, 404, { error: 'not found: ' + subPath });
+}
+
+const server = http.createServer(async (request, res) => {
+  const url = new URL(request.url, 'http://localhost');
+  const p = url.pathname;
+  try {
+    if (p === '/api/overview') return send(res, 200, buildOverview());
+
+    if (p === '/api/overview/stream') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+      res.write(`data: ${JSON.stringify(buildOverview(), jsonReplacer)}\n\n`);
+      server._overviewClients.add(res);
+      request.on('close', () => server._overviewClients.delete(res));
+      return;
+    }
+
+    if (p === '/api/symbols') {
+      if (request.method === 'GET') {
+        return send(res, 200, { symbols: fleet.list(), mode: cfg.bg.mode, exchange: 'Bitget', sharedAccount: true });
+      }
+      if (request.method === 'POST') {
+        const b = await readBody(request);
+        const sym = normalizeSymbol(b.symbol);
+        if (!sym) return send(res, 400, { error: '请提供 symbol，如 ETHUSDT' });
+        if (fleet.list().length >= 20) return send(res, 400, { error: '最多 20 个标的' });
+        const ds = exchange.dataSource;
+        if (ds == null || ds === 'connecting') {
+          return send(res, 400, { error: 'Bitget 尚未就绪，请稍后重试或先点「重连」' });
+        }
+        const m = await fleet.resolveMarket(sym).catch(() => null);
+        if (!m) return send(res, 400, { error: 'Bitget 上找不到: ' + sym });
+        const r = fleet.add(sym);
+        try { persistSymbolsEnv(); } catch (e) { console.error(e?.message || e); }
+        return send(res, 200, r);
+      }
+      if (request.method === 'DELETE') {
+        const b = await readBody(request);
+        const r = await fleet.remove(b.symbol);
+        if (!r.ok) return send(res, 400, r);
+        try { persistSymbolsEnv(); } catch {}
+        const gone = normalizeSymbol(b.symbol);
+        const clients = streamClients.get(gone);
+        if (clients) { for (const c of clients) { try { c.end(); } catch {} } streamClients.delete(gone); }
+        return send(res, 200, r);
+      }
+    }
+
+    if (p === '/api/exchange/markets') {
       return send(res, 200, {
-        exchange: name,
-        mode: exCfg.mode,
-        dataSource: exchange.dataSource || (exCfg.mode === 'live' ? 'real' : 'synthetic'),
-        network: exchange.network || exCfg.network,
-        apiUrl: exchange.apiUrl || exCfg.apiUrl,
+        exchange: 'Bitget', mode: cfg.bg.mode,
+        dataSource: exchange.dataSource || (cfg.bg.mode === 'live' ? 'real' : 'synthetic'),
+        network: exchange.network || cfg.bg.network,
+        apiUrl: exchange.apiUrl || cfg.bg.apiUrl,
         markets: await exchange.getMarkets(),
       });
     }
 
-    if (subPath === '/trend') {
-      const marketId = Number(url.searchParams.get('marketId') || 1);
-      const intervalSec = Number(url.searchParams.get('intervalSec') || 3600);
-      let candles = [];
-      try { candles = await exchange.getCandles(marketId, intervalSec, 200); } catch { /* tolerate */ }
-      let price = null;
-      try { price = await exchange.getPrice(marketId); } catch {}
-      const analysis = (candles && candles.length >= 20)
-        ? analyzeTrend(candles)
-        : {
-            trend: 'range', recommended: 'neutral', strength: 0, atrPct: null, price,
-            detail: '暂时拿不到足够K线数据，已默认中性网格。可手动设置上下边界后启动；不影响下单。',
-          };
-      return send(res, 200, { analysis, candles: (candles || []).slice(-120) });
-    }
-
-    if (subPath === '/state') return send(res, 200, bot.getState());
-
-    if (subPath === '/start' && req.method === 'POST') {
-      try { return send(res, 200, await bot.start(await readBody(req))); }
-      catch (e) { return send(res, 400, { error: e.message }); }
-    }
-
-    if (subPath === '/stop' && req.method === 'POST') {
-      try { return send(res, 200, await bot.stop(await readBody(req))); }
-      catch (e) { return send(res, 400, { error: e.message }); }
-    }
-
-    if (subPath === '/adjust' && req.method === 'POST') {
-      try { return send(res, 200, await bot.adjustRange(await readBody(req))); }
-      catch (e) { return send(res, 400, { error: e.message }); }
-    }
-
-    if (subPath === '/reset' && req.method === 'POST') {
-      try { return send(res, 200, await bot.resetStats()); }
-      catch (e) { return send(res, 400, { error: e.message }); }
-    }
-
-    if (subPath === '/cancel-orders' && req.method === 'POST') {
-      try { return send(res, 200, await bot.cancelAllOrders()); }
-      catch (e) { return send(res, 400, { error: e.message }); }
-    }
-
-    if (subPath === '/start-recovery' && req.method === 'POST') {
-      try { return send(res, 200, await bot.startRecovery(await readBody(req))); }
-      catch (e) { return send(res, 400, { error: e.message }); }
-    }
-
-    // 重新与交易所建立连接：重建客户端/解卡轮询/重启轮询循环。
-    // 不撤单、不平仓、不动网格状态 —— 挂单照常被跟踪；重连成功后立刻对账一次。
-    // 若该所启动时未连上导致续跑被跳过（快照仍为运行状态），重连成功后自动续跑接管挂单。
-    if (subPath === '/reconnect' && req.method === 'POST') {
+    if (p === '/api/exchange/reconnect' && request.method === 'POST') {
       try {
         if (typeof exchange.reconnect === 'function') await exchange.reconnect();
         else if (typeof exchange.init === 'function') await exchange.init();
-        let resumed = false, resumeError = null;
-        if (!bot.running) {
-          const key = prefix.split('/').pop(); // '/api/ex' -> 'ex'
-          const snap = loadSnapshot(key);
-          if (snap?.running && snap?.config) {
-            try {
-              // marketId 是按连接会话编号的，可能已漂移：按市场名称重新解析
-              const markets = await exchange.getMarkets();
-              const norm = (x) => String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-              const m = markets.find((x) => norm(x.displayName) === norm(snap.config.displayName) || norm(x.name) === norm(snap.config.displayName));
-              if (m) snap.config.marketId = m.marketId;
-              await bot.resume(snap);
-              resumed = true;
-              console.log(`[恢复] ${key.toUpperCase()} 重连成功后已自动续跑，接管挂单并完成对账。`);
-            } catch (e) {
-              resumeError = e?.message || String(e); // 续跑失败不撤单：挂单保留，可重启程序再试
-              console.error(`[恢复] ${key.toUpperCase()} 重连后续跑失败（${resumeError}），挂单保留未动。`);
-            }
-          }
+        const resumed = [], errors = [];
+        for (const sym of fleet.list()) {
+          const bot = fleet.get(sym);
+          if (!bot || bot.running) continue;
+          const snap = loadSnapshot(snapKey(sym));
+          if (!(snap?.running && snap?.config)) continue;
+          try {
+            const m = await fleet.resolveMarket(sym);
+            if (m) snap.config.marketId = m.marketId;
+            await bot.resume(snap);
+            resumed.push(sym);
+          } catch (e) { errors.push({ symbol: sym, error: e?.message || String(e) }); }
         }
-        if (bot.running) await bot.reconcileOpenOrders().catch(() => {});
-        return send(res, 200, { ok: true, resumed, resumeError, state: bot.getState() });
-      } catch (e) {
-        return send(res, 500, { error: e?.message || String(e) });
-      }
+        for (const sym of fleet.list()) {
+          const bot = fleet.get(sym);
+          if (bot?.running) await bot.reconcileOpenOrders().catch(() => {});
+        }
+        return send(res, 200, { ok: true, resumed, errors, overview: buildOverview() });
+      } catch (e) { return send(res, 500, { error: e?.message || String(e) }); }
     }
 
-    if (subPath === '/close-position' && req.method === 'POST') {
-      try { const b = await readBody(req); return send(res, 200, await bot.closePositionNow(b && b.marketId)); }
-      catch (e) { return send(res, 400, { error: e.message }); }
-    }
-
-    if (subPath === '/stream') {
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      });
-      res.write(`data: ${JSON.stringify(bot.getState())}\n\n`);
-      clients.add(res);
-      req.on('close', () => clients.delete(res));
-      return;
-    }
-
-    send(res, 404, { error: 'not found: ' + subPath });
-  };
-}
-
-const deHandler = makeExchangeHandler('/api/de', deBot, deExchange, cfg.de, deClients, 'Decibel');
-const exHandler = makeExchangeHandler('/api/ex', exBot, exExchange, cfg.ex, exClients, 'Extended');
-const rsHandler = makeExchangeHandler('/api/rs', rsBot, rsExchange, cfg.rs, rsClients, 'RISEx');
-const bgHandler = makeExchangeHandler('/api/bg', bgBot, bgExchange, cfg.bg, bgClients, 'Bitget');
-
-// ── HTTP 服务器 ───────────────────────────────────────────────────────────────
-const server = http.createServer(async (request, res) => {
-  const url = new URL(request.url, 'http://localhost');
-  const p = url.pathname;
-
-  try {
-    // ── 总览 API ──────────────────────────────────────────────────────────
-    if (p === '/api/overview') {
-      return send(res, 200, {
-        de: pick(deBot.getState(), cfg.de.mode),
-        ex: pick(exBot.getState(), cfg.ex.mode),
-        rs: pick(rsBot.getState(), cfg.rs.mode),
-        bg: pick(bgBot.getState(), cfg.bg.mode),
-      });
-    }
-
-    // ── 总览 SSE 流 ───────────────────────────────────────────────────────
-    if (p === '/api/overview/stream') {
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      });
-      // send the current snapshot immediately (don't leave the client blank
-      // until the next 1s broadcast tick)
-      const initial = {
-        de: pick(deBot.getState(), cfg.de.mode),
-        ex: pick(exBot.getState(), cfg.ex.mode),
-        rs: pick(rsBot.getState(), cfg.rs.mode),
-        bg: pick(bgBot.getState(), cfg.bg.mode),
-      };
-      res.write(`data: ${JSON.stringify(initial, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))}\n\n`);
-      const overviewClients = server._overviewClients;
-      overviewClients.add(res);
-      request.on('close', () => overviewClients.delete(res));
-      return;
-    }
-
-    // ── AI 助手 API ───────────────────────────────────────────────────────
-    if (p === '/api/ai/status') {
-      return send(res, 200, aiService.status());
-    }
+    if (p === '/api/ai/status') return send(res, 200, aiService.status());
     if (p === '/api/ai/test' && request.method === 'POST') {
       try { return send(res, 200, await aiService.test()); }
       catch (e) { return send(res, 200, { ok: false, error: e?.message || String(e) }); }
@@ -334,7 +380,8 @@ const server = http.createServer(async (request, res) => {
     if (p === '/api/ai/analyze' && request.method === 'POST') {
       try {
         const b = await readBody(request);
-        return send(res, 200, await aiService.analyze(String(b.ex || 'de')));
+        const key = normalizeSymbol(b.ex || b.symbol || fleet.list()[0] || 'BTCUSDT');
+        return send(res, 200, await aiService.analyze(key));
       } catch (e) { return send(res, 500, { error: e?.message || String(e) }); }
     }
     if (p === '/api/ai/chat' && request.method === 'POST') {
@@ -345,93 +392,52 @@ const server = http.createServer(async (request, res) => {
       } catch (e) { return send(res, 500, { error: e?.message || String(e) }); }
     }
 
-    // ── 代理配置 API ──────────────────────────────────────────────────────
-    if (p === '/api/proxy-check') {
-      const result = await checkProxy();
-      return send(res, 200, result);
-    }
-
+    if (p === '/api/proxy-check') return send(res, 200, await checkProxy());
     if (p === '/api/proxy-config') {
-      return send(res, 200, {
-        global: process.env.GLOBAL_PROXY || '',
-        de: process.env.DECIBEL_PROXY || '',
-        ex: process.env.EXTENDED_PROXY || '',
-        rs: process.env.RISEX_PROXY || '',
-        bg: process.env.BITGET_PROXY || '',
-      });
+      return send(res, 200, { global: process.env.GLOBAL_PROXY || '', bg: process.env.BITGET_PROXY || '' });
     }
 
     if (p === '/api/env' && request.method === 'POST') {
       try {
         const { key, value } = await readBody(request);
-        const PROXY_KEYS = ['GLOBAL_PROXY','DECIBEL_PROXY','EXTENDED_PROXY','RISEX_PROXY','BITGET_PROXY'];
+        const PROXY_KEYS = ['GLOBAL_PROXY', 'BITGET_PROXY'];
         const AI_KEYS = ['AI_PROVIDER','AI_API_KEY','AI_BASE_URL','AI_MODEL','AI_MODEL_SMALL','AI_SENTINEL_MINUTES','AI_MARKET_MINUTES','AI_REPORT_HOUR','TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID','NOTIFY_WEBHOOK'];
-        if (!PROXY_KEYS.includes(key) && !AI_KEYS.includes(key)) return send(res, 400, { error: '不允许修改该字段: ' + key });
-        // SECURITY: the value is written verbatim into .env. Reject anything that
-        // could break out of a single KEY=VALUE line (newlines / control chars)
-        // — otherwise a crafted value could inject arbitrary env lines (e.g. flip
-        // DE_MODE=live, set private keys). Per-key format validation below.
+        const FLEET_KEYS = ['BG_SYMBOLS', 'BITGET_SYMBOLS'];
+        if (![...PROXY_KEYS, ...AI_KEYS, ...FLEET_KEYS].includes(key)) {
+          return send(res, 400, { error: '不允许修改: ' + key });
+        }
         const val = value == null ? '' : String(value).trim();
         if (val) {
           if (/\s/.test(val) || [...val].some((c) => c.charCodeAt(0) < 32) || val.length > 500) {
-            return send(res, 400, { error: '值包含非法字符（空白/换行/控制字符）或过长。' });
-          }
-          if (PROXY_KEYS.includes(key)) {
-            // host:port | host:port:user:pass | scheme://[user:pass@]host:port
-            const ok = /^[\w.-]+:\d{1,5}(:[^:\s@]+:[^:\s@]+)?$/.test(val)
-              || /^(https?|socks[45]?):\/\/([^:@/\s]+(:[^@/\s]+)?@)?[\w.-]+:\d{1,5}\/?$/i.test(val);
-            if (!ok) return send(res, 400, { error: '代理地址格式无效。示例：http://127.0.0.1:7890 或 socks5://user:pass@host:1080' });
-          } else if (key === 'AI_PROVIDER') {
-            if (!/^(openai|anthropic|gemini)$/i.test(val)) return send(res, 400, { error: 'AI_PROVIDER 只能是 openai / anthropic / gemini（OpenAI 兼容协议的服务商选 openai）。' });
-          } else if (key === 'AI_SENTINEL_MINUTES' || key === 'AI_MARKET_MINUTES') {
-            if (!/^\d{1,4}$/.test(val)) return send(res, 400, { error: '间隔必须是数字（分钟，0=关闭）。' });
-          } else if (key === 'AI_REPORT_HOUR') {
-            if (!/^\d{1,2}$/.test(val) || Number(val) > 23) return send(res, 400, { error: '日报时间必须是 0-23 的整点小时。' });
-          } else if (key === 'AI_BASE_URL' || key === 'NOTIFY_WEBHOOK') {
-            if (!/^https?:\/\/\S+$/i.test(val)) return send(res, 400, { error: '必须是 http(s):// 开头的 URL。' });
+            return send(res, 400, { error: '值非法或过长' });
           }
         }
-        // 更新内存中的环境变量
         if (val) process.env[key] = val; else delete process.env[key];
-        // 写入 .env 文件
         const envFile = path.join(ROOT, '.env');
         let content = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
         const regex = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
         const line = val ? `${key}=${val}` : `# ${key}=`;
-        if (regex.test(content)) {
-          content = content.replace(regex, line);
-        } else {
-          content = content.trimEnd() + '\n' + line + '\n';
-        }
+        if (regex.test(content)) content = content.replace(regex, line);
+        else content = content.trimEnd() + '\n' + line + '\n';
         fs.writeFileSync(envFile, content, 'utf8');
         return send(res, 200, { ok: true });
-      } catch (e) {
-        return send(res, 500, { error: e.message });
-      }
+      } catch (e) { return send(res, 500, { error: e.message }); }
     }
 
-    // ── 交易所子路由 ──────────────────────────────────────────────────────
-    if (p.startsWith('/api/de/')) {
-      return await deHandler(request, res, p.slice('/api/de'.length), url);
-    }
-    if (p.startsWith('/api/ex/')) {
-      return await exHandler(request, res, p.slice('/api/ex'.length), url);
-    }
-    if (p.startsWith('/api/rs/')) {
-      return await rsHandler(request, res, p.slice('/api/rs'.length), url);
-    }
+    const m = p.match(/^\/api\/s\/([A-Za-z0-9]+)(\/.*)?$/);
+    if (m) return await handleSymbolApi(request, res, normalizeSymbol(m[1]), m[2] || '', url);
+
     if (p.startsWith('/api/bg/')) {
-      return await bgHandler(request, res, p.slice('/api/bg'.length), url);
+      const sym = fleet.get('BTCUSDT') ? 'BTCUSDT' : (fleet.list()[0] || 'BTCUSDT');
+      return await handleSymbolApi(request, res, sym, p.slice('/api/bg'.length), url);
     }
 
-    // ── 静态文件 ──────────────────────────────────────────────────────────
     let file = p === '/' ? '/index.html' : p;
     const full = path.join(ROOT, 'public', path.normalize(file).replace(/^(\.\.[/\\])+/, ''));
     if (fs.existsSync(full) && fs.statSync(full).isFile()) {
       res.writeHead(200, { 'Content-Type': MIME[path.extname(full)] || 'application/octet-stream' });
       return fs.createReadStream(full).pipe(res);
     }
-
     send(res, 404, { error: 'not found' });
   } catch (e) {
     send(res, 500, { error: e.message });
@@ -440,171 +446,71 @@ const server = http.createServer(async (request, res) => {
 
 server._overviewClients = new Set();
 
-// ── SSE 推送定时器 ────────────────────────────────────────────────────────────
 setInterval(() => {
-  const stringify = (obj) =>
-    JSON.stringify(obj, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
-
-  if (deClients.size > 0) {
-    const data = `data: ${stringify(deBot.getState())}\n\n`;
-    for (const r of deClients) { try { r.write(data); } catch { deClients.delete(r); } }
-  }
-  if (exClients.size > 0) {
-    const data = `data: ${stringify(exBot.getState())}\n\n`;
-    for (const r of exClients) { try { r.write(data); } catch { exClients.delete(r); } }
-  }
-  if (rsClients.size > 0) {
-    const data = `data: ${stringify(rsBot.getState())}\n\n`;
-    for (const r of rsClients) { try { r.write(data); } catch { rsClients.delete(r); } }
-  }
-  if (bgClients.size > 0) {
-    const data = `data: ${stringify(bgBot.getState())}\n\n`;
-    for (const r of bgClients) { try { r.write(data); } catch { bgClients.delete(r); } }
+  const stringify = (obj) => JSON.stringify(obj, jsonReplacer);
+  for (const [sym, clients] of streamClients) {
+    if (!clients.size) continue;
+    const bot = fleet.get(sym);
+    if (!bot) continue;
+    const data = `data: ${stringify(bot.getState())}\n\n`;
+    for (const r of clients) { try { r.write(data); } catch { clients.delete(r); } }
   }
   if (server._overviewClients.size > 0) {
-    const deState = deBot.getState();
-    const exState = exBot.getState();
-    const rsState = rsBot.getState();
-    const bgState = bgBot.getState();
-    const overview = {
-      de: pick(deState, cfg.de.mode),
-      ex: pick(exState, cfg.ex.mode),
-      rs: pick(rsState, cfg.rs.mode),
-      bg: pick(bgState, cfg.bg.mode),
-    };
-    const data = `data: ${stringify(overview)}\n\n`;
+    const data = `data: ${stringify(buildOverview())}\n\n`;
     for (const r of server._overviewClients) { try { r.write(data); } catch { server._overviewClients.delete(r); } }
   }
 }, 1000);
 
-function pick(s, mode) {
-  return {
-    running: s.running,
-    mode,
-    balance: s.balance,
-    equity: s.equity,
-    totalPnl: s.totalPnl,
-    realizedPnl: s.realizedPnl,
-    unrealizedPnl: s.unrealizedPnl,
-    returnPct: s.returnPct,
-    volume: s.volume,
-    completedRungs: s.stats?.completedRungs ?? 0,
-    openOrders: s.openOrders ?? 0,
-    exchangeOpenOrders: s.exchangeOpenOrders ?? null,
-    outOfRange: s.outOfRange ?? false,
-    health: s.health ?? null,
-    lastPrice: s.lastPrice,
-    config: s.config,
-  };
-}
-
-// ── 错误处理 ──────────────────────────────────────────────────────────────────
 server.on('error', (e) => {
-  if (e.code === 'EADDRINUSE') {
-    console.error(`\n[启动失败] 端口 ${cfg.port} 已被占用。`);
-    console.error('请先关闭之前的程序窗口，或在 .env 里改 PORT=8081 用别的端口。\n');
-  } else {
-    console.error('[服务器错误] ' + (e?.message || e));
-  }
+  if (e.code === 'EADDRINUSE') console.error(`\n[启动失败] 端口 ${cfg.port} 已被占用。\n`);
+  else console.error('[服务器错误] ' + (e?.message || e));
   process.exit(1);
 });
 
-// ── 初始化各交易所 ────────────────────────────────────────────────────────────
-async function initExchange(exchange, name, exCfg) {
-  try {
-    await exchange.init();
-    console.log(`[${name}] ✓ 连接成功 [${exCfg.mode.toUpperCase()} 模式]`);
-  } catch (e) {
-    console.error(`\n[${name}] ✗ 初始化失败：${e?.message || e}`);
-    console.error(`  目标接口: ${exCfg.apiUrl}   网络: ${exCfg.network}`);
-    const cause = e?.cause || {};
-    const code = cause.code || '';
-    if (code === 'ENOTFOUND') {
-      console.error('  ➤ 域名解析失败：检查网络，或配置代理。');
-    } else if (code === 'ECONNREFUSED' && String(cause.address || '').includes('127.0.0.1')) {
-      console.error('  ➤ 本机代理端口连不上，检查代理软件是否开启。');
-    } else if (code === 'UND_ERR_CONNECT_TIMEOUT' || /timeout/i.test(cause.message || '')) {
-      console.error('  ➤ 连接超时，接口被网络拦截，或代理未正确转发。');
-    }
-    console.error(`  该交易所将以离线模式运行（行情可能使用合成数据）。\n`);
-    // 不退出，让其他交易所继续工作
-  }
+try {
+  await exchange.init();
+  console.log(`[Bitget] ✓ 连接成功 [${cfg.bg.mode.toUpperCase()}]`);
+} catch (e) {
+  console.error(`[Bitget] ✗ 初始化失败：${e?.message || e}`);
 }
 
-await Promise.all([
-  initExchange(deExchange, 'Decibel', cfg.de),
-  initExchange(exExchange, 'Extended', cfg.ex),
-  initExchange(rsExchange, 'RISEx', cfg.rs),
-  initExchange(bgExchange, 'Bitget', cfg.bg),
-]);
-
-// ── 崩溃恢复 / 续跑 ────────────────────────────────────────────────────────────
-// If a bot was "running" when the process died, RESUME it: re-attach to the
-// orders still resting on the exchange and keep managing the grid. If resume
-// fails (e.g. exchange offline), fall back to cancelling stray orders so we
-// never operate a half-known grid.
-async function resumeIfWasRunning(bot, exchange, key) {
-  const snap = loadSnapshot(key);
-  if (!(snap?.running && snap?.config)) return;
-  if (exchange.dataSource == null) {
-    console.log(`[恢复] ${key.toUpperCase()} 交易所未连接，跳过续跑；保留挂单待下次连接。`);
-    return;
+for (const sym of fleet.list()) {
+  const bot = fleet.get(sym);
+  const snap = loadSnapshot(snapKey(sym));
+  if (!(snap?.running && snap?.config) || !bot) continue;
+  if (exchange.dataSource == null || exchange.dataSource === 'connecting') {
+    console.log(`[恢复] ${sym} 未连接，跳过续跑`);
+    continue;
   }
   try {
-    console.log(`[恢复] 检测到 ${key.toUpperCase()} 上次为运行状态，正在接管续跑...`);
+    const m = await fleet.resolveMarket(sym);
+    if (m) snap.config.marketId = m.marketId;
     await bot.resume(snap);
-    console.log(`[恢复] ${key.toUpperCase()} 已续跑，接管挂单并完成对账。`);
+    console.log(`[恢复] ${sym} 已续跑`);
   } catch (e) {
-    console.error(`[恢复] ${key.toUpperCase()} 续跑失败（${e?.message || e}），改为撤销遗留挂单。`);
+    console.error(`[恢复] ${sym} 失败：${e?.message || e}`);
     await bot.recoverStrayOrders().catch(() => {});
   }
 }
-await Promise.all([
-  resumeIfWasRunning(deBot, deExchange, 'de'),
-  resumeIfWasRunning(exBot, exExchange, 'ex'),
-  resumeIfWasRunning(rsBot, rsExchange, 'rs'),
-  resumeIfWasRunning(bgBot, bgExchange, 'bg'),
-]);
 
-// After init, surface any LEFTOVER position so the dashboard can prompt the user
-// (recovery ladder / re-grid / market close). Decibel & Extended RE-NUMBER their
-// marketIds every run, so the persisted numeric id may point at the wrong market
-// — re-resolve it by the market NAME, then start watching it so the position is
-// polled into getState.
-const _norm = (x) => String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-async function detectOrphanPosition(bot, ex) {
-  if (!bot.config?.displayName || ex.dataSource == null || typeof ex.getMarkets !== 'function') return;
+for (const sym of fleet.list()) {
+  const bot = fleet.get(sym);
+  if (!bot || exchange.dataSource == null) continue;
   try {
-    const markets = await ex.getMarkets();
-    const want = _norm(bot.config.displayName);
-    const m = markets.find((x) => _norm(x.displayName) === want || _norm(x.name) === want || _norm(x.symbol) === want);
+    const m = await fleet.resolveMarket(sym);
     if (m) {
-      bot.config.marketId = m.marketId;            // fix stale/ephemeral id -> current
-      await ex.getPrice(m.marketId).catch(() => {}); // seed watch -> position gets polled
+      if (bot.config) bot.config.marketId = m.marketId;
+      await exchange.getPrice(m.marketId).catch(() => {});
     }
-  } catch { /* ignore */ }
+  } catch {}
 }
-await Promise.all([
-  detectOrphanPosition(deBot, deExchange),
-  detectOrphanPosition(exBot, exExchange),
-  detectOrphanPosition(rsBot, rsExchange),
-  detectOrphanPosition(bgBot, bgExchange),
-]);
 
 server.listen(cfg.port, cfg.host, () => {
   console.log(`\n${'═'.repeat(52)}`);
-  console.log(`  四交易所整合网格机器人 已启动`);
+  console.log(`  Bitget 网格（多标的）已启动`);
   console.log(`  仪表盘: http://${cfg.host === '0.0.0.0' ? 'localhost' : cfg.host}:${cfg.port}`);
-  if (cfg.host === '0.0.0.0') console.log('  ⚠ 当前监听所有网卡(0.0.0.0)，局域网内可访问，请确保有防护。');
   console.log(`${'═'.repeat(52)}`);
-  console.log(`  Decibel  [${cfg.de.mode.toUpperCase()}]  ${cfg.de.network}`);
-  console.log(`  Extended [${cfg.ex.mode.toUpperCase()}]  ${cfg.ex.network}`);
-  console.log(`  RISEx    [${cfg.rs.mode.toUpperCase()}]  ${cfg.rs.network}`);
-  console.log(`  Bitget   [${cfg.bg.mode.toUpperCase()}]  ${cfg.bg.network}`);
-  console.log(`${'─'.repeat(52)}`);
-  if (cfg.de.mode === 'paper' || cfg.ex.mode === 'paper' || cfg.rs.mode === 'paper' || cfg.bg.mode === 'paper') {
-    console.log('  ⚠ 部分交易所为模拟模式，不涉及真实资金。');
-    console.log('    在 .env 中设置 DE_MODE/EX_MODE/RS_MODE/BG_MODE=live 切换实盘。');
-  }
+  console.log(`  模式    ${cfg.bg.mode.toUpperCase()} · 共享账户余额`);
+  console.log(`  标的    ${fleet.list().join(', ')}`);
   console.log('');
 });

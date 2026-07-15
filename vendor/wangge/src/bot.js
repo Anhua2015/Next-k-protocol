@@ -39,15 +39,16 @@ export class GridBot {
     // whole Node process. Adapters emit 'error' on cancelled/rejected orders, so
     // we MUST always have a listener attached for the bot's whole lifetime.
     this._onError = (e) => this._handleExError(e);
-    this.ex.on('error', this._onError);
+    // Multi-bot fleets share one adapter: only one layer should bind 'error'.
+    this._boundError = opts.bindError !== false;
+    if (this._boundError) this.ex.on('error', this._onError);
     this._cancelTimes = [];          // timestamps of recent order cancellations
     this._refillPausedUntil = 0;     // back-off window: pause new placements until this time
     this._lastErrAlertAt = 0;
     this._lastErrLogAt = 0;
     this._retryQueue = [];           // failed CLOSING-leg placements awaiting retry (never opening legs)
     this._noPosStreak = 0;           // consecutive empty-position observations (recovery finish guard)
-    this._pnlBase = null;            // realizedPnl baseline; resetStats uses an offset because some
-                                     // adapters (RISEx) re-fetch realizedPnl from the exchange every poll
+    this._pnlBase = null;            // realizedPnl baseline when adapter refreshes from exchange each poll
   }
 
   /**
@@ -75,6 +76,18 @@ export class GridBot {
 
   /** Notify the persistence layer (if any) that durable state changed. */
   _changed() { try { this._onChange?.(this.snapshot()); } catch { /* never let persistence break trading */ } }
+
+  /** Detach listeners when removing a fleet slot. */
+  dispose() {
+    try { this.ex.off('fill', this._onFill); } catch {}
+    try { this.ex.off('price', this._onPrice); } catch {}
+    if (this._boundError) {
+      try { this.ex.off('error', this._onError); } catch {}
+      this._boundError = false;
+    }
+    if (this._reconTimer) { clearInterval(this._reconTimer); this._reconTimer = null; }
+    this.running = false;
+  }
 
   /** Durable snapshot for crash recovery / resume. Includes resting orders. */
   snapshot() {
@@ -386,10 +399,7 @@ export class GridBot {
     this._refillPausedUntil = 0; this._cancelTimes = [];
     this.startBalance = typeof this.ex.equity === 'number' ? this.ex.equity
       : typeof this.ex.balance === 'number' ? this.ex.balance : this.startBalance;
-    // Offset-based reset: adapters like RISEx refresh realizedPnl from the
-    // exchange every poll, so writing 0 into it never sticks — record a
-    // baseline instead and subtract it in getState.
-    this._pnlBase = typeof this.ex.realizedPnl === 'number' ? this.ex.realizedPnl : null;
+    this._pnlBase = null;
     this._alert('已重置统计：已实现盈亏、收益率、成交量、完成格数清零，并以当前权益为新基准。');
     this._changed();
     return this.getState();
@@ -906,19 +916,17 @@ export class GridBot {
     for (const o of this.active.values()) openByLevel[o.levelIndex] = o.side;
 
     const unrealized = pos ? round2(pos.unrealizedPnl) : 0;
-    const balance = typeof this.ex.balance === 'number' ? round2(this.ex.balance) : null;
-    const equityRaw = typeof this.ex.equity === 'number' ? this.ex.equity
+    const balRaw = typeof this.ex.balance === 'number' && Number.isFinite(this.ex.balance) ? this.ex.balance : null;
+    const balance = balRaw != null ? round2(balRaw) : null;
+    // Shared-account adapters expose account equity; do not add only this symbol's upnl on top.
+    const equityRaw = (typeof this.ex.equity === 'number' && Number.isFinite(this.ex.equity))
+      ? this.ex.equity
       : (balance != null ? balance + unrealized : null);
     const equity = equityRaw != null ? round2(equityRaw) : null;
 
-    let realized;
-    if (typeof this.ex.realizedPnl === 'number') {
-      realized = round2(this.ex.realizedPnl - (this._pnlBase ?? 0)); // offset applied by resetStats
-    } else if (equityRaw != null && this.startBalance != null) {
-      realized = round2((equityRaw - this.startBalance) - unrealized);
-    } else {
-      realized = round2(this.stats.gridProfit);
-    }
+    // Per-bot realized MUST be this grid's attributable profit — never the shared
+    // account's realizedPnl (that would duplicate N× across symbols in overview).
+    const realized = round2(this.stats.gridProfit);
     const totalPnl = round2(realized + unrealized);
     const returnPct = (this.startBalance && this.startBalance > 0)
       ? round2((totalPnl / this.startBalance) * 100)

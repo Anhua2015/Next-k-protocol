@@ -1,7 +1,7 @@
-"""Reverse-proxy 3xx-wangge (vendor/wangge) + Bitget fourth venue.
+"""Reverse-proxy Bitget wangge (vendor/wangge).
 
 Protocol keeps /api/binance/* /docs /redoc; everything else → wangge :8080
-(dashboard + /api/de|/ex|/rs|/bg|/overview|/ai|…).
+(dashboard + /api/s/:SYM + /api/overview + /api/symbols + /api/ai|…).
 """
 
 from __future__ import annotations

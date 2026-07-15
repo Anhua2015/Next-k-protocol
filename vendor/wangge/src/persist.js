@@ -35,11 +35,7 @@ export function loadSnapshot(key) {
   return loadState()[key] || null;
 }
 
-/** Persist one bot's snapshot under `key`, debounced to avoid thrashing disk. */
-export function saveSnapshot(key, snapshot) {
-  const state = loadState();
-  state[key] = snapshot;
-  cache = state;
+function flushSoon() {
   if (saveTimer) return;
   saveTimer = setTimeout(() => {
     saveTimer = null;
@@ -50,4 +46,21 @@ export function saveSnapshot(key, snapshot) {
     } catch { /* persistence must never crash trading */ }
   }, 500);
   saveTimer.unref?.();
+}
+
+/** Persist one bot's snapshot under `key`, debounced to avoid thrashing disk. */
+export function saveSnapshot(key, snapshot) {
+  const state = loadState();
+  state[key] = snapshot;
+  cache = state;
+  flushSoon();
+}
+
+/** Remove a snapshot key (e.g. after deleting a fleet symbol). */
+export function deleteSnapshot(key) {
+  const state = loadState();
+  if (!(key in state)) return;
+  delete state[key];
+  cache = state;
+  flushSoon();
 }

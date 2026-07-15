@@ -1,9 +1,6 @@
-// Unit tests for the pure-function core: grid math (src/grid.js) and the
-// Extended signing/precision helpers (src/exchange/ex/starkcrypto.js).
-// Run with: npm test
+// Unit tests: grid math + proxy helpers. Run with: npm test
 import assert from 'node:assert/strict';
 import { buildGrid, seedOrders, replacementFor, isReduceOnly, rungProfit } from '../src/grid.js';
-import { selfTest, alignToStep, parseDec, settlementAmounts } from '../src/exchange/ex/starkcrypto.js';
 import { normalizeProxy } from '../src/proxy.js';
 
 let passed = 0, failed = 0;
@@ -91,37 +88,6 @@ test('isReduceOnly matrix', () => {
 
 test('rungProfit', () => {
   assert.equal(rungProfit(10, 0.5), 5);
-});
-
-console.log('starkcrypto.js');
-
-test('selfTest (official SDK vector) passes', () => {
-  selfTest();
-});
-
-test('parseDec', () => {
-  assert.deepEqual(parseDec('12.34'), { i: 1234n, scale: 2 });
-  assert.deepEqual(parseDec('5'), { i: 5n, scale: 0 });
-  assert.throws(() => parseDec('abc'));
-});
-
-test('alignToStep: integer tick keeps trailing zeros (regression)', () => {
-  // regression: "63170" must NOT become "6317"
-  assert.equal(alignToStep(63170, '1', 'nearest'), '63170');
-  assert.equal(alignToStep(64000, '1', 'nearest'), '64000');
-});
-
-test('alignToStep: decimal steps', () => {
-  assert.equal(alignToStep(61827.73, '0.1', 'nearest'), '61827.7');
-  assert.equal(alignToStep(0.0035, '0.001', 'down'), '0.003');
-  assert.equal(alignToStep(1.2999999, '0.01', 'nearest'), '1.3');
-});
-
-test('settlementAmounts signs: buy vs sell', () => {
-  const buy = settlementAmounts({ qty: '0.001', price: '43445.1168', feeRate: '0.0005', synRes: 1e6, colRes: 1e6, isBuy: true });
-  assert.ok(buy.syntheticAmount > 0n && buy.collateralAmount < 0n && buy.feeAmount > 0n);
-  const sell = settlementAmounts({ qty: '0.001', price: '43445.1168', feeRate: '0.0005', synRes: 1e6, colRes: 1e6, isBuy: false });
-  assert.ok(sell.syntheticAmount < 0n && sell.collateralAmount > 0n && sell.feeAmount > 0n);
 });
 
 console.log('proxy.js');

@@ -38,6 +38,18 @@ export class PaperExchange extends EventEmitter {
     this._pollTimer = null;
   }
 
+  /** Shared-account equity = cash + all legs' unrealized. */
+  get equity() {
+    let upnl = 0;
+    for (const [id, p] of this.positions) {
+      if (!p || !p.sizeBase) continue;
+      const last = this.prices.get(id);
+      if (!Number.isFinite(last)) continue;
+      upnl += p.sizeBase * (last - p.entryPrice);
+    }
+    return this.balance + upnl;
+  }
+
   async init() {
     let chosen = null;
     for (const url of this.candidates) {
@@ -67,10 +79,10 @@ export class PaperExchange extends EventEmitter {
           this.apiUrl = url;
           if (this.dataSource !== 'real') {
             this.dataSource = 'real';
-            this._setMarkets(list);
+            this._setMarkets(list, { preserveIds: true });
             for (const [id, m] of this.markets) {
-              this.prices.set(id, m.lastPrice || 100);
-              this.realTarget.set(id, m.lastPrice || 100);
+              if (!this.prices.has(id)) this.prices.set(id, m.lastPrice || 100);
+              this.realTarget.set(id, m.lastPrice || this.prices.get(id) || 100);
             }
           }
           break;
@@ -136,7 +148,27 @@ export class PaperExchange extends EventEmitter {
     } catch { return null; }
   }
 
-  _setMarkets(list) { this.markets.clear(); for (const m of list) this.markets.set(m.marketId, m); }
+  _setMarkets(list, { preserveIds = false } = {}) {
+    if (!preserveIds || !this.markets.size) {
+      this.markets.clear();
+      for (const m of list) this.markets.set(m.marketId, m);
+      return;
+    }
+    // Keep existing marketId per symbol so running bots / orders stay valid.
+    const byName = new Map();
+    for (const m of this.markets.values()) {
+      const n = String(m.name || m.displayName || '').toUpperCase();
+      if (n) byName.set(n, m.marketId);
+    }
+    let nextId = Math.max(0, ...this.markets.keys(), 0) + 1;
+    const next = new Map();
+    for (const m of list) {
+      const n = String(m.name || m.displayName || '').toUpperCase();
+      const id = byName.has(n) ? byName.get(n) : nextId++;
+      next.set(id, { ...m, marketId: id });
+    }
+    this.markets = next;
+  }
 
   async getMarkets() { return [...this.markets.values()]; }
 

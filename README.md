@@ -18,10 +18,10 @@ Next K Protocol 是 Next K 交易系统的**执行层服务**，负责：
 
 ```
 next-k-api ──/api/binance/*──► Next K Protocol（币安执行）
-next-k-frontend/wangge.html ─► Protocol / （3xx-wangge 原样总控台+AI）
+next-k-frontend/wangge.html ─► Protocol / （Bitget 多标的网格）
 ```
 
-`vendor/wangge` = `3xx-wangge-main` 原壳 + Bitget（`bg`）第四所。详见 `docs/WANGGE.md`。
+`vendor/wangge` = Bitget USDT 永续多标的网格（共享账户）。详见 `docs/WANGGE.md`。
 
 ### 架构图
 
