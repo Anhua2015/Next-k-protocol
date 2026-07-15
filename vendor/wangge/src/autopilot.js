@@ -11,7 +11,7 @@ export function defaultAutopilot(partial = {}) {
     enabled: partial.enabled !== false, // default ON — hands-off after start
     riskProfile: partial.riskProfile === 'aggressive' ? 'aggressive' : 'steady',
     intervalMs: Math.max(60_000, Number(partial.intervalMs) || 10 * 60_000),
-    minStrength: clamp(Number(partial.minStrength ?? 0.45), 0.15, 0.9),
+    minStrength: clamp(Number(partial.minStrength ?? 0.55), 0.15, 0.9),
     coolDownMs: Math.max(60_000, Number(partial.coolDownMs) || 30 * 60_000),
     // Paper and live share the same policy: allow reverse flip on strong signals
     allowFlip: partial.allowFlip != null ? !!partial.allowFlip : true,

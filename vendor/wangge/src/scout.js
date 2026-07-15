@@ -130,19 +130,19 @@ export function createScout(ctx) {
       why.push(`ATR过高${atr.toFixed(2)}%`);
     }
 
-    // Regime: range best; mild trend ok; strong one-way nearly disqualified
+    // Regime: pure range best (backtest: neutral >> directional in range AND mild trends).
     const strength = Number(analysis.strength) || 0;
     if (analysis.trend === 'range') {
-      score += 0.40;
-      why.push('震荡优');
+      score += 0.45;
+      why.push('震荡适合中性');
     } else if (strength < 0.45) {
-      score += 0.26;
-      why.push(`弱${analysis.trend}`);
-    } else if (strength < 0.65) {
-      score += 0.12;
-      why.push(`中等${analysis.trend}`);
+      score += 0.18;
+      why.push(`弱${analysis.trend}·宜中性`);
+    } else if (strength < 0.70) {
+      score += 0.08;
+      why.push(`中等${analysis.trend}·慎单边`);
     } else {
-      score += 0.02;
+      score -= 0.05;
       why.push(`强趋势回避`);
     }
 
@@ -244,7 +244,13 @@ export function createScout(ctx) {
       trend: row.trend, recommended: row.recommended || 'neutral',
       strength: row.strength || 0, atrPct: row.atrPct, price: row.price || market.lastPrice,
     };
-    const mode = analysis.recommended || 'neutral';
+    // Backtest: forced neutral beat long/short across range/up/down synthetics.
+    // Only use directional when signal is very strong (≥0.75).
+    const strength = Number(analysis.strength) || 0;
+    let mode = 'neutral';
+    if ((analysis.recommended === 'long' || analysis.recommended === 'short') && strength >= 0.75) {
+      mode = analysis.recommended;
+    }
     const sug = suggestFromTrend(analysis, { mode, riskProfile: 'steady' });
     if (!sug) throw new Error('无法生成网格参数 ' + sym);
     const equity = await accountEquity();
