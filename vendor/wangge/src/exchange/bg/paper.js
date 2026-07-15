@@ -126,10 +126,9 @@ export class PaperExchange extends EventEmitter {
         if (!Number.isFinite(p) || p < 0 || p > 12) return fb;
         return Number((10 ** -p).toFixed(p));
       };
-      for (const m of rows.slice(0, 40)) {
+      for (const m of rows) {
         const sym = String(m.symbol);
-        const price = tick.get(sym) || Number(m.lastPr || 0);
-        if (!price) continue;
+        const price = tick.get(sym) || Number(m.lastPr || 0) || 0;
         const stepPrice = stepFromPlace(m.pricePlace, 0.1);
         const stepSize = stepFromPlace(m.volumePlace, 0.001);
         const minSz = Number(m.minTradeNum || m.minOrderQty || stepSize);
@@ -138,7 +137,7 @@ export class PaperExchange extends EventEmitter {
           name: sym,
           displayName: sym,
           symbol: String(m.baseCoin || sym.replace(/USDT$/i, '')),
-          lastPrice: price,
+          lastPrice: price || 100,
           stepSize, stepPrice,
           maxLeverage: Number(m.maxLever || m.maxLeverage || 50),
           minOrderSize: minSz > 0 ? minSz : stepSize,
@@ -171,6 +170,31 @@ export class PaperExchange extends EventEmitter {
   }
 
   async getMarkets() { return [...this.markets.values()]; }
+
+  /**
+   * Look up / inject a single USDT-perp by symbol (e.g. HYPEUSDT).
+   * Refreshes the contract list if missing from the local cache.
+   */
+  async ensureSymbol(symbol) {
+    const want = String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!want) return null;
+    const hit = (list) => list.find((m) => {
+      const n = String(m.name || m.displayName || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      return n === want;
+    }) || null;
+    let found = hit([...this.markets.values()]);
+    if (found) return found;
+    if (this.dataSource === 'synthetic') return null;
+    const list = await this._fetchMarkets(this.apiUrl);
+    if (!list?.length) return null;
+    this._setMarkets(list, { preserveIds: true });
+    for (const [id, m] of this.markets) {
+      if (!this.prices.has(id)) this.prices.set(id, m.lastPrice || 100);
+      if (!this.realTarget.has(id)) this.realTarget.set(id, m.lastPrice || this.prices.get(id) || 100);
+    }
+    this.dataSource = 'real';
+    return hit([...this.markets.values()]);
+  }
 
   async getCandles(marketId, intervalSec = 3600, n = 200) {
     const m = this.markets.get(Number(marketId));

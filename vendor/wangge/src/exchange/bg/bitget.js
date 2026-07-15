@@ -190,6 +190,51 @@ export class BitgetExchange extends EventEmitter {
   // ---------- markets ----------
   async getMarkets() { return [...this.markets.values()]; }
 
+  /** Ensure a USDT-perp is present (refresh contracts if the local map is stale). */
+  async ensureSymbol(symbol) {
+    const want = String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!want) return null;
+    const hit = (list) => list.find((m) => {
+      const n = String(m.name || m.displayName || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      return n === want;
+    }) || null;
+    let found = hit([...this.markets.values()]);
+    if (found) return found;
+
+    const contracts = await this._public('/api/v2/mix/market/contracts', { productType: this.productType });
+    const tickers = await this._public('/api/v2/mix/market/tickers', { productType: this.productType }).catch(() => []);
+    const tick = new Map();
+    for (const t of tickers || []) tick.set(String(t.symbol), Number(t.lastPr || t.markPrice || 0));
+
+    const byName = new Map();
+    for (const m of this.markets.values()) byName.set(String(m.name).toUpperCase(), m.marketId);
+    let nextId = Math.max(0, ...this.markets.keys(), 0) + 1;
+
+    for (const raw of contracts || []) {
+      const st = String(raw.symbolStatus || raw.status || 'normal').toLowerCase();
+      if (st && st !== 'normal' && st !== 'listed') continue;
+      const sym = String(raw.symbol || '');
+      if (!sym.endsWith('USDT') && String(raw.quoteCoin || '').toUpperCase() !== 'USDT') continue;
+      if (byName.has(sym.toUpperCase())) continue;
+      const stepPrice = stepFromPlace(raw.pricePlace, 0.1);
+      const stepSize = stepFromPlace(raw.volumePlace, 0.001);
+      const minSz = Number(raw.minTradeNum || stepSize);
+      const px = tick.get(sym) || 0;
+      const id = nextId++;
+      this.markets.set(id, {
+        marketId: id, name: sym, displayName: sym,
+        symbol: String(raw.baseCoin || sym.replace(/USDT$/i, '')),
+        lastPrice: px,
+        stepSize, stepPrice,
+        maxLeverage: Number(raw.maxLever || 50),
+        minOrderSize: minSz > 0 ? minSz : stepSize,
+      });
+      if (px) this._prices.set(id, px);
+      byName.set(sym.toUpperCase(), id);
+    }
+    return hit([...this.markets.values()]);
+  }
+
   _market(marketId) {
     const m = this.markets.get(Number(marketId));
     if (!m) throw new Error('未知市场 marketId=' + marketId);

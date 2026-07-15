@@ -69,7 +69,11 @@ export function createFleet(exchange, initialSymbols = ['BTCUSDT']) {
     async resolveMarket(symbol) {
       const sym = normalizeSymbol(symbol);
       const markets = await exchange.getMarkets();
-      return markets.find((x) => marketMatches(x, sym)) || null;
+      let m = markets.find((x) => marketMatches(x, sym)) || null;
+      if (!m && typeof exchange.ensureSymbol === 'function') {
+        m = await exchange.ensureSymbol(sym).catch(() => null);
+      }
+      return m;
     },
     marketMatches,
   };
