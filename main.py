@@ -113,13 +113,18 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    # 临时放开到 * 以便线上前端能跨域访问；建议尽快配 PROTOCOL_CORS_ORIGINS
-    # 环境变量后改回白名单（参考 _parse_cors_origins 注释）。
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
 )
+
+from routers.wangge_proxy import WanggeProxyMiddleware, wangge_enabled
+
+# Added after CORS → runs first on requests: proxy Next K grid UI/API, keep /api/binance + docs.
+if wangge_enabled():
+    app.add_middleware(WanggeProxyMiddleware)
+    logger.info("Next K grid proxy enabled (vendor/wangge)")
 
 from router import router
 app.include_router(router)
@@ -127,9 +132,9 @@ app.include_router(router)
 from routers.metrics import router as metrics_router
 app.include_router(metrics_router)
 
-logger.info("Routes registered: /api/binance/*")
-logger.info("Swagger docs: http://0.0.0.0:%d/docs", PORT)
-logger.info("Health check: http://0.0.0.0:%d/api/binance/health", PORT)
+logger.info("Routes: /api/binance/* | Wangge UI+API proxied on /")
+logger.info("Swagger: http://0.0.0.0:%d/docs", PORT)
+logger.info("Binance health: http://0.0.0.0:%d/api/binance/health", PORT)
 
 
 if __name__ == "__main__":

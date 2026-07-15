@@ -1,0 +1,16 @@
+{
+  "name": "next-k-grid",
+  "version": "1.0.0",
+  "description": "Next K · Bitget USDT 永续多标的网格（一账户共享余额，一标的一 GridBot）。",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node test/grid.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "undici": "^6.19.8"
+  }
+}

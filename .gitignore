@@ -12,3 +12,6 @@ htmlcov/
 .pid/
 logs/
 .env.oi
+vendor/wangge/node_modules/
+vendor/wangge/.env
+vendor/wangge/logs/
