@@ -549,7 +549,37 @@ let lastOverview = {};
 let ovEs = null;
 let bgMode = 'paper';
 
+/** 前端门禁（非整站安全）；默认 1903，可用 localStorage.wangge_console_pass 覆盖 */
+const CONSOLE_PASS_DEFAULT = '1903';
+const CONSOLE_UNLOCK_KEY = 'wangge_console_ok';
+
+function isPublicTab(name) {
+  return name === 'overview' || name === 'ai' || name === 'settings';
+}
+
+function consoleUnlocked() {
+  try { return sessionStorage.getItem(CONSOLE_UNLOCK_KEY) === '1'; } catch { return false; }
+}
+
+function requireConsolePass() {
+  if (consoleUnlocked()) return true;
+  let expect = CONSOLE_PASS_DEFAULT;
+  try {
+    const o = localStorage.getItem('wangge_console_pass');
+    if (o != null && String(o).length) expect = String(o);
+  } catch { /* */ }
+  const got = window.prompt('进入标的控制台需要密码：');
+  if (got === null) return false;
+  if (got === expect) {
+    try { sessionStorage.setItem(CONSOLE_UNLOCK_KEY, '1'); } catch { /* */ }
+    return true;
+  }
+  alert('密码错误');
+  return false;
+}
+
 function switchTab(name) {
+  if (!isPublicTab(name) && !requireConsolePass()) return;
   activeTab = name;
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
