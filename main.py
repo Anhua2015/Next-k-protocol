@@ -121,10 +121,10 @@ app.add_middleware(
 
 from routers.wangge_proxy import WanggeProxyMiddleware, wangge_enabled
 
-# Added after CORS → runs first on requests: proxy wangge UI/API, keep /api/binance + docs.
+# Added after CORS → runs first on requests: proxy Next K grid UI/API, keep /api/binance + docs.
 if wangge_enabled():
     app.add_middleware(WanggeProxyMiddleware)
-    logger.info("Wangge proxy enabled (3xx absolute → vendor/wangge)")
+    logger.info("Next K grid proxy enabled (vendor/wangge)")
 
 from router import router
 app.include_router(router)

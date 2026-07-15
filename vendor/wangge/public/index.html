@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Bitget 网格总控台</title>
+<title>Next K · 网格总控台</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
 /* Next K 统一视觉（对齐 next-k-frontend/theme.css · dark） */
@@ -273,11 +273,10 @@ th { color: var(--mut2); font-weight: 600; font-size: 10px; letter-spacing: .3px
 .total-card .sub { font-size: 11px; color: var(--mut2); }
 
 .fleet-bar {
-  display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
   margin-bottom: 14px; padding: 12px 14px;
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
 }
-.fleet-bar input { width: 180px; }
 .fleet-bar .btn { width: auto; margin: 0; padding: 7px 14px; font-size: 12px; }
 
 .auto-log {
@@ -310,9 +309,9 @@ th { color: var(--mut2); font-weight: 600; font-size: 10px; letter-spacing: .3px
 
 <!-- ── Header ── -->
 <div class="header">
-  <div class="header-logo">Bitget <span>网格</span></div>
+  <div class="header-logo">Next <span>K</span></div>
   <div class="header-sep"></div>
-  <span class="hdot idle" id="hdr-mode-dot" title="Bitget"></span>
+  <span class="hdot idle" id="hdr-mode-dot" title="Bitget USDT 永续"></span>
   <span id="hdr-mode" class="badge badge-paper">BG: PAPER</span>
   <div class="header-right">
     <span id="hdr-proxy" class="conn" title="全局代理状态"><span class="cdot"></span><span id="hdr-proxy-txt">代理检测中…</span></span>
@@ -358,7 +357,7 @@ th { color: var(--mut2); font-weight: 600; font-size: 10px; letter-spacing: .3px
     </div>
   </div>
 
-  <p class="muted" style="margin:-6px 0 14px;font-size:12px">Bitget 统一账户，多标的共享余额 · 选币官自动维护候选池（最多 5 个机器人）</p>
+  <p class="muted" style="margin:-6px 0 14px;font-size:12px">Next K · Bitget 统一账户，多标的共享余额 · 选币官自动维护候选池（最多 5 个机器人）</p>
 
   <div class="panel" style="margin-bottom:14px">
     <div class="panel-title">选币官 · 候选池<span id="scout-meta" class="muted" style="font-size:11px;margin-left:10px;font-weight:400"></span></div>
@@ -371,13 +370,8 @@ th { color: var(--mut2); font-weight: 600; font-size: 10px; letter-spacing: .3px
   </div>
 
   <div class="fleet-bar">
-    <div>
-      <label style="margin-top:0">手动添加（可选）</label>
-      <input id="new-sym-input" type="text" placeholder="例：ETHUSDT" autocomplete="off">
-    </div>
-    <button class="btn btn-smart" onclick="addSymbol(this)">添加</button>
     <button class="btn btn-ghost" onclick="reconnectExchange(this)">重连交易所</button>
-    <span id="sym-add-status" class="muted" style="align-self:center"></span>
+    <span id="ex-reconnect-status" class="muted" style="align-self:center"></span>
   </div>
 
   <div class="overview-grid" id="ov-grid"></div>
@@ -549,29 +543,36 @@ let lastOverview = {};
 let ovEs = null;
 let bgMode = 'paper';
 
-/** 前端门禁（非整站安全）；默认 1903，可用 localStorage.wangge_console_pass 覆盖 */
+/** 前端门禁（非整站安全）；默认 1903，可用 localStorage.nextk_console_pass 覆盖 */
 const CONSOLE_PASS_DEFAULT = '1903';
-const CONSOLE_UNLOCK_KEY = 'wangge_console_ok';
+const CONSOLE_UNLOCK_KEY = 'nextk_console_ok';
 
 function isPublicTab(name) {
   return name === 'overview' || name === 'ai' || name === 'settings';
 }
 
 function consoleUnlocked() {
-  try { return sessionStorage.getItem(CONSOLE_UNLOCK_KEY) === '1'; } catch { return false; }
+  try {
+    return sessionStorage.getItem(CONSOLE_UNLOCK_KEY) === '1'
+      || sessionStorage.getItem('wangge_console_ok') === '1';
+  } catch { return false; }
 }
 
 function requireConsolePass() {
   if (consoleUnlocked()) return true;
   let expect = CONSOLE_PASS_DEFAULT;
   try {
-    const o = localStorage.getItem('wangge_console_pass');
+    const o = localStorage.getItem('nextk_console_pass')
+      || localStorage.getItem('wangge_console_pass');
     if (o != null && String(o).length) expect = String(o);
   } catch { /* */ }
   const got = window.prompt('进入标的控制台需要密码：');
   if (got === null) return false;
   if (got === expect) {
-    try { sessionStorage.setItem(CONSOLE_UNLOCK_KEY, '1'); } catch { /* */ }
+    try {
+      sessionStorage.setItem(CONSOLE_UNLOCK_KEY, '1');
+      sessionStorage.removeItem('wangge_console_ok');
+    } catch { /* */ }
     return true;
   }
   alert('密码错误');
@@ -1194,28 +1195,6 @@ async function bootstrap() {
   }
 }
 
-async function addSymbol(btn) {
-  const input = $('new-sym-input');
-  const symbol = (input.value || '').trim().toUpperCase();
-  if (!symbol) { alert('请输入标的，如 ETHUSDT'); return; }
-  const orig = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '添加中…'; }
-  try {
-    const r = await fetch('/api/symbols', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol }),
-    });
-    const j = await r.json();
-    if (j.error) throw new Error(j.error);
-    input.value = '';
-    $('sym-add-status').textContent = `已添加 ${symbol}`;
-    await bootstrap();
-  } catch (e) {
-    alert('添加失败：' + e.message);
-  }
-  if (btn) { btn.disabled = false; btn.textContent = orig; }
-}
-
 async function removeSymbol(sym) {
   if (!confirm(`确认移除标的 ${sym}？\n请先停止该标的网格后再移除；共享账户余额不受影响。`)) return;
   try {
@@ -1248,7 +1227,7 @@ async function reconnectExchange(btn) {
       setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2500);
       return;
     }
-    $('sym-add-status').textContent = msg;
+    $('ex-reconnect-status').textContent = msg;
   } catch (e) {
     alert('重连失败：' + e.message);
   }

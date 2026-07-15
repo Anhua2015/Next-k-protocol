@@ -1,6 +1,6 @@
-# Bitget 多标的网格（wangge）
+# Next K 网格（Bitget）
 
-源码：`vendor/wangge`。只保留 **Bitget** USDT 永续。
+源码目录：`vendor/wangge`（实现名；产品面统称 **Next K**）。只保留 **Bitget** USDT 永续。
 
 ## 模型
 

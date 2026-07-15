@@ -132,7 +132,7 @@ class AiService {
       const text = await aiChat({
         small: true, json: true, maxTokens: 900, temperature: 0.1,
         system: [
-          '你是 Bitget 多标的网格的风控值守 AI。根据状态快照，对每个标的分别给出巡检结论，并给一句整体结论。',
+          '你是 Next K（Bitget 多标的网格）的风控值守 AI。根据状态快照，对每个标的分别给出巡检结论，并给一句整体结论。',
           '重点关注：health.status 为 error/warn 及其 reason；trackedOrders 与 exchangeOpenOrders 明显不一致（挂单同步漂移）；',
           '保证金/权益吃紧（未实现亏损占权益比例大、returnPct 恶化）；outOfRange=true（价格冲出网格区间）；',
           '告警里的关键词（保证金不足、频繁取消、未确认成交、接口异常、暂停补单）；数据长时间未更新。',
@@ -163,7 +163,7 @@ class AiService {
               .map(([k, v]) => `${exLabel(k)}：${v.summary}${v.advice ? `（建议：${v.advice}）` : ''}`)
               .join('\n')
           : this.sentinel.detail;
-        notify(`【网格机器人·${lv === 'critical' ? '严重' : '注意'}】${this.sentinel.summary}\n${perTxt}`).catch(() => {});
+        notify(`【Next K·${lv === 'critical' ? '严重' : '注意'}】${this.sentinel.summary}\n${perTxt}`).catch(() => {});
       }
       if (lv === 'ok') this._lastPushLevel = 'ok';
       return this.sentinel;
@@ -205,7 +205,7 @@ class AiService {
       const text = await aiChat({
         json: false, maxTokens: 1200, temperature: 0.4,
         system: [
-          '你是网格交易机器人的复盘分析师。用简洁的中文写一份运行日报（纯文本，不用 markdown 标题符号）。',
+          '你是 Next K 网格的复盘分析师。用简洁的中文写一份运行日报（纯文本，不用 markdown 标题符号）。',
           '内容：1)各标的各自的盈亏归因（网格已实现 vs 持仓浮动）；2)成交活跃度与网格参数是否匹配（完成格数、间距）；',
           '3)风险点（保证金、区间边缘、挂单异常）；4)下一步的 1-3 条可执行建议。',
           '数字保留两位小数；paper 为模拟盘要注明；没跑的标的一句话带过。总长 300 字以内。',
@@ -214,7 +214,7 @@ class AiService {
       });
       this.report = { t: Date.now(), text: text.trim() };
       this._rebaseline(); // 下一期从现在起算
-      notify('【网格机器人·日报】\n' + this.report.text).catch(() => {});
+      notify('【Next K·日报】\n' + this.report.text).catch(() => {});
       return this.report;
     } finally { this._busy.report = false; }
   }
@@ -239,7 +239,7 @@ class AiService {
     const text = await aiChat({
       json: true, maxTokens: 900, temperature: 0.3,
       system: [
-        '你是网格交易策略顾问。根据多周期技术指标判断当前市况，并给出网格参数建议。',
+        '你是 Next K 网格策略顾问。根据多周期技术指标判断当前市况，并给出网格参数建议。',
         '牢记网格策略的数学本质：震荡市赚钱、单边市亏钱（持仓积累+浮亏）。你的首要任务是判断"当前适不适合跑网格"。',
         '回复 JSON：{"regime":"震荡|上升趋势|下降趋势|剧烈波动","suitable":true/false,',
         '"recommendMode":"neutral|long|short","confidence":0到1,',
@@ -306,7 +306,7 @@ class AiService {
     const text = await aiChat({
       json: true, maxTokens: 1000, temperature: 0.3,
       system: [
-        '你是网格交易机器人的操作助手。用户会用中文和你对话，你可以直接回答（基于提供的实时状态快照），',
+        '你是 Next K 网格的操作助手。用户会用中文和你对话，你可以直接回答（基于提供的实时状态快照），',
         '也可以在需要执行操作时提出一个 action 提议（由用户在界面上确认后才会执行，你自己无法执行任何操作）。',
         '可用 action.type：adjust_range(params:{lower,upper}) | stop_grid(params:{closePosition:true/false}) |',
         'cancel_orders | close_position | reconnect | start_recovery(params:{aboveEntryOnly}) |',
@@ -375,7 +375,7 @@ class AiService {
     const j = extractJson(text);
     if (!j) return;
     this.oorAdvice[key] = { t: Date.now(), ...j };
-    notify(`【网格机器人·出区间】${exLabel(key)} ${st.config?.displayName} 价格冲出区间（现价 ${st.lastPrice}）。\nAI 建议：${j.suggestionText || j.suggestion}\n理由：${j.reasoning || ''}\n（已配置的自动策略正在执行，此建议供复核）`).catch(() => {});
+    notify(`【Next K·出区间】${exLabel(key)} ${st.config?.displayName} 价格冲出区间（现价 ${st.lastPrice}）。\nAI 建议：${j.suggestionText || j.suggestion}\n理由：${j.reasoning || ''}\n（已配置的自动策略正在执行，此建议供复核）`).catch(() => {});
   }
 
   // ---------- 状态/测试 ----------

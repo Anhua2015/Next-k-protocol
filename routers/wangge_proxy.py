@@ -1,6 +1,6 @@
-"""Reverse-proxy Bitget wangge (vendor/wangge).
+"""Reverse-proxy Next K 网格 (vendor/wangge → Bitget multi-symbol).
 
-Protocol keeps /api/binance/* /docs /redoc; everything else → wangge :8080
+Protocol keeps /api/binance/* /docs /redoc; everything else → grid UI on :8080
 (dashboard + /api/s/:SYM + /api/overview + /api/symbols + /api/ai|…).
 """
 
@@ -30,7 +30,7 @@ def _keep_on_protocol(path: str) -> bool:
 
 
 class WanggeProxyMiddleware(BaseHTTPMiddleware):
-    """Forward non-Protocol traffic to the unmodified wangge Node process."""
+    """Forward non-Protocol traffic to the Next K grid Node process."""
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path or "/"
@@ -89,7 +89,7 @@ class WanggeProxyMiddleware(BaseHTTPMiddleware):
                 )
         except httpx.RequestError as exc:
             return Response(
-                content=f'{{"error":"wangge unreachable at {_upstream()}: {exc}"}}',
+                content=f'{{"error":"Next K grid unreachable at {_upstream()}: {exc}"}}',
                 status_code=502,
                 media_type="application/json",
             )

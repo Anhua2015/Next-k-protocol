@@ -1,7 +1,7 @@
 {
-  "name": "wangge-bitget",
+  "name": "next-k-grid",
   "version": "1.0.0",
-  "description": "Bitget USDT 永续多标的网格：一账户共享余额，一标的一 GridBot。",
+  "description": "Next K · Bitget USDT 永续多标的网格（一账户共享余额，一标的一 GridBot）。",
   "type": "module",
   "scripts": {
     "start": "node src/server.js",

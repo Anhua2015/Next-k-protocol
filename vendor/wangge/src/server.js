@@ -541,12 +541,12 @@ for (const sym of fleet.list()) {
 
 server.listen(cfg.port, cfg.host, () => {
   console.log(`\n${'═'.repeat(52)}`);
-  console.log(`  Bitget 网格（多标的）已启动`);
+  console.log(`  Next K 网格（Bitget 多标的）已启动`);
   console.log(`  仪表盘: http://${cfg.host === '0.0.0.0' ? 'localhost' : cfg.host}:${cfg.port}`);
   console.log(`${'═'.repeat(52)}`);
   console.log(`  模式    ${cfg.bg.mode.toUpperCase()} · 共享账户余额`);
   console.log(`  标的    ${fleet.list().join(', ') || '（由选币官自动填充，最多5个）'}`);
   console.log('');
-  pushAutoLog({ source: '系统', type: 'boot', message: `wangge 已启动 · ${cfg.bg.mode.toUpperCase()} · 选币官最多 ${5} 个机器人` });
+  pushAutoLog({ source: '系统', type: 'boot', message: `Next K 已启动 · ${cfg.bg.mode.toUpperCase()} · 选币官最多 ${5} 个机器人` });
   scout.start();
 });

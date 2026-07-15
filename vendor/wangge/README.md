@@ -1,6 +1,6 @@
-# Bitget 多标的网格（wangge）
+# Next K 网格（Bitget）
 
-仅支持 **Bitget** USDT 永续：一条连接、共享账户余额，`BG_SYMBOLS` 一标的一 GridBot。
+产品名 **Next K**；本目录为 Bitget USDT 永续多标的网格实现：一条连接、共享账户余额，一标的一 GridBot。
 
 配置与运行说明见仓库 [`docs/WANGGE.md`](../../docs/WANGGE.md) 与 [`.env.example`](.env.example)。
 
