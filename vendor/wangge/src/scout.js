@@ -6,22 +6,18 @@ import { pushAutoLog } from './autolog.js';
 
 /** Liquid majors — default auto-eligible at scoreIn. */
 export const SCOUT_CORE = Object.freeze([
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT',
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT',
 ]);
 
 /**
  * Second-tier large caps — eligible only with higher score + clear range/weak trend.
- * Override via SCOUT_ALLOWLIST / SCOUT_ALLOWLIST_SECONDARY (comma-separated).
+ * Empty by default (only BTC/ETH/SOL). Override via SCOUT_ALLOWLIST_SECONDARY.
  */
-export const SCOUT_SECONDARY = Object.freeze([
-  'ADAUSDT', 'AVAXUSDT', 'LINKUSDT', 'DOTUSDT', 'NEARUSDT', 'LTCUSDT',
-  'ATOMUSDT', 'UNIUSDT', 'ARBUSDT', 'OPUSDT', 'SUIUSDT', 'APTUSDT',
-  'TONUSDT', 'TRXUSDT', 'HYPEUSDT',
-]);
+export const SCOUT_SECONDARY = Object.freeze([]);
 
 const DEFAULTS = {
   enabled: true,
-  maxBots: 5,
+  maxBots: 3,
   intervalMs: 2 * 60 * 60_000, // 2h — slow cadence, less churn
   poolSize: 30,          // volume-ranked screen before ATR scoring (within allowlist)
   scoreIn: 0.68,         // core entry floor
@@ -272,7 +268,7 @@ export function createScout(ctx) {
   }
 
   function sizeBaseFor(market, price, leverage, equity, slots) {
-    const r = RISK.steady;
+    const r = RISK.aggressive;
     const bal = Number(equity) > 0 ? Number(equity) : 15000;
     const n = Math.max(1, slots);
     const budgetNotional = (bal * (r.budget || 0.7) * leverage) / n;
@@ -313,7 +309,7 @@ export function createScout(ctx) {
     if ((analysis.recommended === 'long' || analysis.recommended === 'short') && strength >= 0.75) {
       mode = analysis.recommended;
     }
-    const sug = suggestFromTrend(analysis, { mode, riskProfile: 'steady' });
+    const sug = suggestFromTrend(analysis, { mode, riskProfile: 'aggressive' });
     if (!sug) throw new Error('无法生成网格参数 ' + sym);
     const equity = await accountEquity();
     const lev = Math.min(sug.leverage || 3, market.maxLeverage || 50);
@@ -329,7 +325,7 @@ export function createScout(ctx) {
         sizeBase,
         leverage: lev,
         outOfRangeAction: 'recover',
-        autopilot: { enabled: true, riskProfile: 'steady', allowFlip: true },
+        autopilot: { enabled: true, riskProfile: 'aggressive', allowFlip: true },
       });
     } catch (e) {
       try { await fleet.remove(sym); } catch { /* */ }
@@ -547,7 +543,7 @@ export function createScout(ctx) {
   function start() {
     configure({
       enabled: process.env.SCOUT_ENABLED !== '0' && process.env.SCOUT_ENABLED !== 'false',
-      maxBots: Number(process.env.SCOUT_MAX_BOTS || 5),
+      maxBots: Number(process.env.SCOUT_MAX_BOTS || DEFAULTS.maxBots),
       intervalMs: Number(process.env.SCOUT_INTERVAL_MS || DEFAULTS.intervalMs),
       minHoldMs: Number(process.env.SCOUT_MIN_HOLD_MS || DEFAULTS.minHoldMs),
       scoreInSecondary: process.env.SCOUT_SCORE_IN_SECONDARY != null

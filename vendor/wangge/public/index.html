@@ -633,10 +633,10 @@ function symbolPanelHtml(sym) {
       <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
         <span class="muted">风格</span>
         <div class="risk-toggle" id="${p}-risk-toggle">
-          <span class="risk-btn sel" data-risk="steady">稳健</span>
-          <span class="risk-btn" data-risk="aggressive">激进</span>
+          <span class="risk-btn" data-risk="steady">稳健</span>
+          <span class="risk-btn sel" data-risk="aggressive">激进</span>
         </div>
-        <span class="muted" id="${p}-risk-hint">成交少·更安全</span>
+        <span class="muted" id="${p}-risk-hint">成交频繁·收益与风险更高</span>
       </div>
       <button class="btn btn-smart" id="${p}-smart-fill">智能填充参数</button>
       <div class="muted" id="${p}-smart-note" style="margin:5px 0 2px">默认：分析行情 → 托管启动 → 后续自动调区间/守卫</div>
@@ -745,7 +745,7 @@ function overviewCardHtml(sym) {
 
 function makeExchangeCtrl(sym) {
   let selectedMode = 'neutral';
-  let riskProfile = 'steady';
+  let riskProfile = 'aggressive';
   let markets = [];
   let curTrend = null;
   let lastState = null;

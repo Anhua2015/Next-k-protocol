@@ -9,7 +9,7 @@ export const RISK = {
 export function defaultAutopilot(partial = {}) {
   return {
     enabled: partial.enabled !== false, // default ON — hands-off after start
-    riskProfile: partial.riskProfile === 'aggressive' ? 'aggressive' : 'steady',
+    riskProfile: partial.riskProfile === 'steady' ? 'steady' : 'aggressive',
     intervalMs: Math.max(60_000, Number(partial.intervalMs) || 10 * 60_000),
     minStrength: clamp(Number(partial.minStrength ?? 0.55), 0.15, 0.9),
     coolDownMs: Math.max(60_000, Number(partial.coolDownMs) || 30 * 60_000),
@@ -25,8 +25,8 @@ export function defaultAutopilot(partial = {}) {
 /**
  * Suggest grid bounds (+ optional gridCount/leverage) from analyzeTrend result.
  */
-export function suggestFromTrend(analysis, { mode, riskProfile = 'steady', gridCount, leverage } = {}) {
-  const r = RISK[riskProfile] || RISK.steady;
+export function suggestFromTrend(analysis, { mode, riskProfile = 'aggressive', gridCount, leverage } = {}) {
+  const r = RISK[riskProfile] || RISK.aggressive;
   const p = Number(analysis?.price);
   if (!(p > 0)) return null;
   const atrPct = Number(analysis?.atrPct) > 0 ? Number(analysis.atrPct) : 0.8;

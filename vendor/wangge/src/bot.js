@@ -940,7 +940,7 @@ export class GridBot {
       const mode = cfg.mode || analysis.recommended || 'neutral';
       const sug = suggestFromTrend(analysis, {
         mode,
-        riskProfile: this.autopilot?.riskProfile || 'steady',
+        riskProfile: this.autopilot?.riskProfile || 'aggressive',
         gridCount: cfg.gridCount != null ? Number(cfg.gridCount) : undefined,
         leverage: cfg.leverage != null ? Number(cfg.leverage) : undefined,
       });
