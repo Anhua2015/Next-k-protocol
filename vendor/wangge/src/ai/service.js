@@ -245,7 +245,7 @@ class AiService {
         '"recommendMode":"neutral|long|short","confidence":0到1,',
         '"suggestedRange":{"lower":数字,"upper":数字},"suggestedGridCount":数字,"suggestedSpacingPct":数字,',
         '"reasoning":"中文分析(150字内)","caution":"中文风险提示(80字内)"}',
-        '建议区间要贴合当前价格与波动率（ATR），间距要能覆盖 Bitget maker 往返约 0.04%（0.02%×2）手续费。',
+        '建议区间要贴合当前价格与波动率（ATR），间距要能覆盖约 0.1% 的往返手续费。',
       ].join('\n'),
       messages: [{
         role: 'user',

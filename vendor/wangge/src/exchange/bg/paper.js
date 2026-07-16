@@ -24,10 +24,7 @@ export class PaperExchange extends EventEmitter {
     this.tickMs = opts.tickMs ?? 1000;
     this.pollMs = opts.pollMs ?? 5000;
     this.volPerTick = opts.volPerTick ?? 0.0015;
-    // Bitget USDT-M perp base: maker 0.02% / taker 0.06%
-    this.makerFeeRate = Number(opts.makerFeeRate ?? opts.feeRate) || 0.0002;
-    this.takerFeeRate = Number(opts.takerFeeRate) || 0.0006;
-    this.feeRate = this.makerFeeRate;
+    this.feeRate = Number(opts.feeRate) || 0.0006;
     this.markets = new Map();
     this.orders = new Map();
     this.positions = new Map();
@@ -259,7 +256,7 @@ export class PaperExchange extends EventEmitter {
     const p = this.positions.get(id);
     if (!p || !p.sizeBase) return null;
     const price = this.prices.get(id);
-    this._applyFill(id, p.sizeBase > 0 ? 'sell' : 'buy', price, Math.abs(p.sizeBase), this.takerFeeRate);
+    this._applyFill(id, p.sizeBase > 0 ? 'sell' : 'buy', price, Math.abs(p.sizeBase));
     return true;
   }
 
@@ -330,8 +327,8 @@ export class PaperExchange extends EventEmitter {
     return side === 'sell' ? p.sizeBase > 0 : p.sizeBase < 0;
   }
 
-  _applyFill(marketId, side, price, qty, feeRate = this.makerFeeRate) {
-    const fee = price * qty * feeRate;
+  _applyFill(marketId, side, price, qty) {
+    const fee = price * qty * this.feeRate;
     this.balance -= fee;
     this.realizedPnl -= fee;
     const p = this.positions.get(marketId) || { sizeBase: 0, entryPrice: 0 };
