@@ -532,7 +532,7 @@ const apiS = (sym, path) => `/api/s/${sym}${path}`;
 
 const RISK = {
   steady:     { rMul:4, rMin:.02, rMax:.06, sMul:.5, sMin:.5, sMax:1, lev:{hi:2,mid:2,lo:3}, budget:.70, skew:1.2, hint:'成交少·更安全·覆盖广' },
-  aggressive: { rMul:2.5, rMin:.015, rMax:.04, sMul:.25, sMin:.2, sMax:.5, lev:{hi:20,mid:20,lo:20}, budget:.90, skew:1.4, hint:'成交频繁·默认20x·收益与风险更高' },
+  aggressive: { rMul:2.5, rMin:.015, rMax:.04, sMul:.25, sMin:.2, sMax:.5, lev:{hi:30,mid:30,lo:30}, budget:.90, skew:1.4, hint:'成交频繁·默认30x·冲出区间平仓' },
 };
 
 let fleetSymbols = [];
@@ -636,7 +636,7 @@ function symbolPanelHtml(sym) {
           <span class="risk-btn" data-risk="steady">稳健</span>
           <span class="risk-btn sel" data-risk="aggressive">激进</span>
         </div>
-        <span class="muted" id="${p}-risk-hint">成交频繁·默认20x</span>
+        <span class="muted" id="${p}-risk-hint">成交频繁·默认30x</span>
       </div>
       <button class="btn btn-smart" id="${p}-smart-fill">智能填充参数</button>
       <div class="muted" id="${p}-smart-note" style="margin:5px 0 2px">默认：分析行情 → 托管启动 → 后续自动调区间/守卫</div>
@@ -650,12 +650,12 @@ function symbolPanelHtml(sym) {
         <div><label>每格数量(币)</label><input id="${p}-size-base" type="number" step="any" value="0.01"></div>
       </div>
       <div class="row">
-        <div><label>杠杆 (x)</label><input id="${p}-leverage" type="number" value="20" min="1"></div>
+        <div><label>杠杆 (x)</label><input id="${p}-leverage" type="number" value="30" min="1"></div>
         <div>
           <label>区间外止损策略</label>
           <select id="${p}-auto-stop">
-            <option value="recover" selected>只减仓回收阶梯</option>
-            <option value="close">冲破区间平仓</option>
+            <option value="recover">只减仓回收阶梯</option>
+            <option value="close" selected>冲破区间平仓</option>
           </select>
         </div>
       </div>
@@ -771,7 +771,7 @@ function makeExchangeCtrl(sym) {
 
   function sizeByBalance() {
     const p = lastState?.lastPrice || curTrend?.price;
-    if (p) autoSizePerGrid(p, +P('leverage').value || 20);
+    if (p) autoSizePerGrid(p, +P('leverage').value || 30);
   }
 
   async function loadMarkets() {
@@ -923,7 +923,7 @@ function makeExchangeCtrl(sym) {
         gridCount: +P('grid-count').value,
         sizeBase: +P('size-base').value,
         leverage: +P('leverage').value,
-        outOfRangeAction: P('auto-stop').value || 'recover',
+        outOfRangeAction: P('auto-stop').value || 'close',
         autopilot: { enabled: true, riskProfile, allowFlip: true },
       };
       const r = await fetch(apiS(sym, '/start'), {
@@ -990,7 +990,7 @@ function makeExchangeCtrl(sym) {
     const lower = +P('lower').value, upper = +P('upper').value, n = +P('grid-count').value, sz = +P('size-base').value, lev = +P('leverage').value;
     if (!(upper > lower) || !n || !sz) { alert('无法自动计算区间，请在左侧手动填写参数后点"启动"。'); return; }
     if (!confirm(`按现价重开网格：区间 [${lower}, ${upper}]，${n} 格，每格 ${sz}，${lev}x。\n现有持仓将作为网格库存保留。继续？`)) return;
-    const body = { marketId: +P('market').value, mode: 'neutral', lower, upper, gridCount: n, sizeBase: sz, leverage: lev, outOfRangeAction: P('auto-stop').value || 'recover', autopilot: { enabled: true, riskProfile, allowFlip: true } };
+    const body = { marketId: +P('market').value, mode: 'neutral', lower, upper, gridCount: n, sizeBase: sz, leverage: lev, outOfRangeAction: P('auto-stop').value || 'close', autopilot: { enabled: true, riskProfile, allowFlip: true } };
     const r = await fetch(apiS(sym, '/start'), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
     const j = await r.json();
     if (j.error) alert('启动失败：' + j.error);

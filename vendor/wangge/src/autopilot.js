@@ -3,8 +3,8 @@
 
 export const RISK = {
   steady:     { rMul: 4, rMin: 0.02, rMax: 0.06, sMul: 0.5, sMin: 0.5, sMax: 1, lev: { hi: 2, mid: 2, lo: 3 }, budget: 0.70, skew: 1.2 },
-  // Online default: aggressive range + fixed 20x
-  aggressive: { rMul: 2.5, rMin: 0.015, rMax: 0.04, sMul: 0.25, sMin: 0.2, sMax: 0.5, lev: { hi: 20, mid: 20, lo: 20 }, budget: 0.90, skew: 1.4 },
+  // Online default: aggressive range + fixed 30x
+  aggressive: { rMul: 2.5, rMin: 0.015, rMax: 0.04, sMul: 0.25, sMin: 0.2, sMax: 0.5, lev: { hi: 30, mid: 30, lo: 30 }, budget: 0.90, skew: 1.4 },
 };
 
 export function defaultAutopilot(partial = {}) {
@@ -96,7 +96,7 @@ export function decideAutopilot({ analysis, config, lastPrice, autopilot, now = 
             ...sug,
             sizeBase: config.sizeBase,
             leverage: config.leverage || sug.leverage,
-            outOfRangeAction: config.outOfRangeAction || 'recover',
+            outOfRangeAction: config.outOfRangeAction || 'close',
             marketId: config.marketId,
           },
         };
@@ -121,7 +121,7 @@ export function decideAutopilot({ analysis, config, lastPrice, autopilot, now = 
             ...sug,
             sizeBase: config.sizeBase,
             leverage: config.leverage || sug.leverage,
-            outOfRangeAction: config.outOfRangeAction || 'recover',
+            outOfRangeAction: config.outOfRangeAction || 'close',
             marketId: config.marketId,
           },
         };
@@ -137,7 +137,7 @@ export function decideAutopilot({ analysis, config, lastPrice, autopilot, now = 
             ...sug,
             sizeBase: config.sizeBase,
             leverage: config.leverage || sug.leverage,
-            outOfRangeAction: config.outOfRangeAction || 'recover',
+            outOfRangeAction: config.outOfRangeAction || 'close',
             marketId: config.marketId,
           },
         };
