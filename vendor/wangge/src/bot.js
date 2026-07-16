@@ -244,7 +244,7 @@ export class GridBot {
     // Hands-off: if bounds missing, fill from trend analysis automatically.
     cfg = await this._autofillBounds(cfg);
 
-    const leverage = Math.min(Number(cfg.leverage || 30), market.maxLeverage || 50);
+    const leverage = Math.min(Number(cfg.leverage || 20), market.maxLeverage || 50);
     const sizeBase = Math.max(Number(cfg.sizeBase), market.minOrderSize || 0);
     this.config = {
       marketId: market.marketId, displayName: market.displayName,

@@ -316,7 +316,7 @@ export function createScout(ctx) {
     const sug = suggestFromTrend(analysis, { mode, riskProfile: 'aggressive' });
     if (!sug) throw new Error('无法生成网格参数 ' + sym);
     const equity = await accountEquity();
-    const lev = Math.min(sug.leverage || 30, market.maxLeverage || 50);
+    const lev = Math.min(sug.leverage || 20, market.maxLeverage || 50);
     const sizeBase = sizeBaseFor(market, analysis.price || market.lastPrice, lev, equity, state.maxBots);
 
     try {
@@ -328,7 +328,7 @@ export function createScout(ctx) {
         gridCount: sug.gridCount,
         sizeBase,
         leverage: lev,
-        outOfRangeAction: 'close',
+        outOfRangeAction: 'recover',
         autopilot: { enabled: true, riskProfile: 'aggressive', allowFlip: true },
       });
     } catch (e) {
