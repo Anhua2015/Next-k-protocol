@@ -271,15 +271,15 @@ export function createScout(ctx) {
     return scored;
   }
 
-  function sizeBaseFor(market, price, leverage, equity, slots) {
+  function sizeBaseFor(market, price, leverage, equity, slots, gridCount = 50) {
     const r = RISK.aggressive;
     const bal = Number(equity) > 0 ? Number(equity) : 15000;
     const n = Math.max(1, slots);
     const budgetNotional = (bal * (r.budget || 0.9) * leverage) / n;
     const step = Number(market.stepSize) || 0.0001;
     const minSz = Number(market.minOrderSize || step);
-    const gridCount = 20;
-    let size = Math.floor((budgetNotional / gridCount / price) / step) * step;
+    const grids = Math.max(2, Number(gridCount) || 50);
+    let size = Math.floor((budgetNotional / grids / price) / step) * step;
     if (!(size > 0) || size < minSz) size = minSz;
     // round to step decimals
     const decimals = String(step).includes('.') ? String(step).split('.')[1].length : 0;
@@ -306,18 +306,19 @@ export function createScout(ctx) {
       trend: row.trend, recommended: row.recommended || 'neutral',
       strength: row.strength || 0, atrPct: row.atrPct, price: row.price || market.lastPrice,
     };
-    // Backtest: forced neutral beat long/short across range/up/down synthetics.
-    // Only use directional when signal is very strong (≥0.75).
+    // Template: 中性 · 50 格 · 30x · 冲破区间平仓（间距约覆盖 Bitget maker 往返 3～4×）。
+    // Only flip directional when signal is very strong (≥0.75).
     const strength = Number(analysis.strength) || 0;
     let mode = 'neutral';
     if ((analysis.recommended === 'long' || analysis.recommended === 'short') && strength >= 0.75) {
       mode = analysis.recommended;
     }
-    const sug = suggestFromTrend(analysis, { mode, riskProfile: 'aggressive' });
+    const gridCount = 50;
+    const sug = suggestFromTrend(analysis, { mode, riskProfile: 'aggressive', gridCount, leverage: 30 });
     if (!sug) throw new Error('无法生成网格参数 ' + sym);
     const equity = await accountEquity();
     const lev = Math.min(sug.leverage || 30, market.maxLeverage || 50);
-    const sizeBase = sizeBaseFor(market, analysis.price || market.lastPrice, lev, equity, state.maxBots);
+    const sizeBase = sizeBaseFor(market, analysis.price || market.lastPrice, lev, equity, state.maxBots, gridCount);
 
     try {
       await bot.start({
@@ -325,7 +326,7 @@ export function createScout(ctx) {
         mode: sug.mode,
         lower: sug.lower,
         upper: sug.upper,
-        gridCount: sug.gridCount,
+        gridCount,
         sizeBase,
         leverage: lev,
         outOfRangeAction: 'close',

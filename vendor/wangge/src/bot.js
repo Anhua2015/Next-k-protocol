@@ -282,11 +282,11 @@ export class GridBot {
       }
     }
 
-    // ---- fee vs spacing sanity check ----
-    const feeRate = Number(this.ex.feeRate) || 0.0005;
-    const roundTripFeePct = feeRate * 2 * 100;
+    // ---- fee vs spacing sanity check (Bitget maker 0.02% × 2 = 0.04% round-trip) ----
+    const makerFee = Number(this.ex.makerFeeRate ?? this.ex.feeRate) || 0.0002;
+    const roundTripFeePct = makerFee * 2 * 100;
     if (this.risk.spacingPct <= roundTripFeePct) {
-      this._alert(`⚠️ 网格间距 ${this.risk.spacingPct}% 不足以覆盖往返手续费（约 ${round2(roundTripFeePct)}%），每完成一格可能亏损。建议拉大间距或减少网格数。`);
+      this._alert(`⚠️ 网格间距 ${this.risk.spacingPct}% 不足以覆盖 Bitget maker 往返手续费（约 ${round2(roundTripFeePct)}% = 0.02%×2），每完成一格可能亏损。建议拉大间距或减少网格数。`);
     }
 
     const levOk = await this.ex.setLeverage(market.marketId, leverage).catch(() => false);

@@ -532,7 +532,7 @@ const apiS = (sym, path) => `/api/s/${sym}${path}`;
 
 const RISK = {
   steady:     { rMul:4, rMin:.02, rMax:.06, sMul:.5, sMin:.5, sMax:1, lev:{hi:2,mid:2,lo:3}, budget:.70, skew:1.2, hint:'成交少·更安全·覆盖广' },
-  aggressive: { rMul:2.5, rMin:.015, rMax:.04, sMul:.25, sMin:.2, sMax:.5, lev:{hi:30,mid:30,lo:30}, budget:.90, skew:1.4, hint:'成交频繁·默认30x·冲出区间平仓' },
+  aggressive: { rMul:2.5, rMin:.02, rMax:.05, sMul:.18, sMin:.15, sMax:.25, lev:{hi:30,mid:30,lo:30}, budget:.90, skew:1.4, hint:'中性·50格·30x·冲出平仓' },
 };
 
 let fleetSymbols = [];
@@ -636,7 +636,7 @@ function symbolPanelHtml(sym) {
           <span class="risk-btn" data-risk="steady">稳健</span>
           <span class="risk-btn sel" data-risk="aggressive">激进</span>
         </div>
-        <span class="muted" id="${p}-risk-hint">成交频繁·默认30x</span>
+        <span class="muted" id="${p}-risk-hint">中性·50格·30x</span>
       </div>
       <button class="btn btn-smart" id="${p}-smart-fill">智能填充参数</button>
       <div class="muted" id="${p}-smart-note" style="margin:5px 0 2px">默认：分析行情 → 托管启动 → 后续自动调区间/守卫</div>
@@ -646,7 +646,7 @@ function symbolPanelHtml(sym) {
         <div><label>上边界</label><input id="${p}-upper" type="number" step="any"></div>
       </div>
       <div class="row">
-        <div><label>网格数量</label><input id="${p}-grid-count" type="number" value="20" min="2"></div>
+        <div><label>网格数量</label><input id="${p}-grid-count" type="number" value="50" min="2"></div>
         <div><label>每格数量(币)</label><input id="${p}-size-base" type="number" step="any" value="0.01"></div>
       </div>
       <div class="row">
@@ -872,7 +872,7 @@ function makeExchangeCtrl(sym) {
     if (!mkt || !bal || !price) return;
     const step = mkt.stepSize || 0.0001;
     const minSz = mkt.minOrderSize || step;
-    let n = +P('grid-count').value || 20;
+    let n = +P('grid-count').value || 50;
     const budgetNotional = bal * lev * (RISK[riskProfile]?.budget || 0.4);
     let size = Math.floor((budgetNotional / n / price) / step) * step;
     if (size < minSz) { size = minSz; const maxN = Math.max(2, Math.floor(budgetNotional / (minSz * price))); n = Math.min(n, maxN); P('grid-count').value = n; }

@@ -41,7 +41,10 @@ export class BitgetExchange extends EventEmitter {
     this.productType = opts.productType || PRODUCT;
     this.marginMode = (opts.marginMode || 'crossed').toLowerCase() === 'isolated' ? 'isolated' : 'crossed';
     this.network = 'mainnet';
-    this.feeRate = 0.0006;
+    // Bitget USDT-M perp base tier: maker 0.02% / taker 0.06%
+    this.makerFeeRate = 0.0002;
+    this.takerFeeRate = 0.0006;
+    this.feeRate = this.makerFeeRate; // grids are post-only/limit → maker
     this.posMode = 'one_way_mode'; // refreshed on init
     this.pollMs = opts.pollMs ?? 2500;
     this._graceMs = this.pollMs * 2;
