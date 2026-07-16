@@ -272,10 +272,10 @@ export function createScout(ctx) {
   }
 
   function sizeBaseFor(market, price, leverage, equity, slots) {
-    const r = RISK.steady;
+    const r = RISK.aggressive;
     const bal = Number(equity) > 0 ? Number(equity) : 15000;
     const n = Math.max(1, slots);
-    const budgetNotional = (bal * (r.budget || 0.7) * leverage) / n;
+    const budgetNotional = (bal * (r.budget || 0.9) * leverage) / n;
     const step = Number(market.stepSize) || 0.0001;
     const minSz = Number(market.minOrderSize || step);
     const gridCount = 20;
@@ -313,10 +313,10 @@ export function createScout(ctx) {
     if ((analysis.recommended === 'long' || analysis.recommended === 'short') && strength >= 0.75) {
       mode = analysis.recommended;
     }
-    const sug = suggestFromTrend(analysis, { mode, riskProfile: 'steady' });
+    const sug = suggestFromTrend(analysis, { mode, riskProfile: 'aggressive' });
     if (!sug) throw new Error('无法生成网格参数 ' + sym);
     const equity = await accountEquity();
-    const lev = Math.min(sug.leverage || 3, market.maxLeverage || 50);
+    const lev = Math.min(sug.leverage || 20, market.maxLeverage || 50);
     const sizeBase = sizeBaseFor(market, analysis.price || market.lastPrice, lev, equity, state.maxBots);
 
     try {
@@ -329,7 +329,7 @@ export function createScout(ctx) {
         sizeBase,
         leverage: lev,
         outOfRangeAction: 'recover',
-        autopilot: { enabled: true, riskProfile: 'steady', allowFlip: true },
+        autopilot: { enabled: true, riskProfile: 'aggressive', allowFlip: true },
       });
     } catch (e) {
       try { await fleet.remove(sym); } catch { /* */ }
