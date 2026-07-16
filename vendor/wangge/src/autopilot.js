@@ -3,8 +3,8 @@
 
 export const RISK = {
   steady:     { rMul: 4, rMin: 0.02, rMax: 0.06, sMul: 0.5, sMin: 0.5, sMax: 1, lev: { hi: 2, mid: 2, lo: 3 }, budget: 0.70, skew: 1.2 },
-  // Online default: neutral-style grid (~50 rungs) + 30x + close-on-break
-  aggressive: { rMul: 2.5, rMin: 0.02, rMax: 0.05, sMul: 0.18, sMin: 0.15, sMax: 0.25, lev: { hi: 30, mid: 30, lo: 30 }, budget: 0.90, skew: 1.4 },
+  // Online default: original aggressive band (±2–4%) · 50 rungs · 30x · close-on-break
+  aggressive: { rMul: 2.5, rMin: 0.02, rMax: 0.04, sMul: 0.18, sMin: 0.15, sMax: 0.25, lev: { hi: 30, mid: 30, lo: 30 }, budget: 0.90, skew: 1.4 },
 };
 
 export function defaultAutopilot(partial = {}) {
