@@ -793,15 +793,66 @@ def basis_pct_of(symbol):
     return (snap.get(symbol) or {}).get("basis_pct", 0.0)
 
 
+def _wall_snap(symbol, price=None):
+    """Compact order-book wall fields for the trade journal."""
+    wall = db.get_factor("ob_wall", symbol)
+    if not wall:
+        return {
+            "ob_wall_n": 0,
+            "ob_wall_soft": 1,
+            "ob_wall_note": "missing",
+            "ob_wall_near_bid": "-",
+            "ob_wall_near_ask": "-",
+        }
+    orders = wall.get("orders") or []
+    if not isinstance(orders, list):
+        orders = []
+    price = float(price or mark_price_of(symbol) or 0)
+    near_bid = near_ask = None
+    for o in orders:
+        try:
+            px = float(o.get("price") or 0)
+            side = str(o.get("side") or "").lower()
+            n = float(o.get("notional") or 0)
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        if side in ("bid", "buy", "b") and px < price:
+            dist = (price - px) / price * 100
+            if near_bid is None or dist < near_bid[0]:
+                near_bid = (dist, px, n)
+        if side in ("ask", "sell", "s") and px > price:
+            dist = (px - price) / price * 100
+            if near_ask is None or dist < near_ask[0]:
+                near_ask = (dist, px, n)
+
+    def fmt(hit):
+        if not hit:
+            return "-"
+        return f"{hit[1]:.6g}@{hit[2]:.0f}U/{hit[0]:.2f}%"
+
+    soft = 0 if orders else 1
+    return {
+        "ob_wall_n": len(orders),
+        "ob_wall_soft": soft,
+        "ob_wall_thr": wall.get("threshold_usd"),
+        "ob_wall_note": "ok" if orders else "empty",
+        "ob_wall_near_bid": fmt(near_bid),
+        "ob_wall_near_ask": fmt(near_ask),
+    }
+
+
 def snapshot_for(symbol):
-    """Compact factor snapshot for the trade journal (scalar values only)."""
+    """Compact factor snapshot for the trade journal (scalars + wall summary)."""
     def g(name, sym, *path):
         v = db.get_factor(name, sym)
         for k in path:
             v = (v or {}).get(k) if isinstance(v, dict) else None
         return round(v, 6) if isinstance(v, (int, float)) else v
 
-    return {
+    px = mark_price_of(symbol)
+    snap = {
         "funding_agg": g("funding_agg", symbol, "latest"),
         "lsr_global": g("lsr_global", symbol, "latest"),
         "lsr_top_pos": g("lsr_top_pos", symbol, "latest"),
@@ -814,5 +865,7 @@ def snapshot_for(symbol):
         "coinbase_prem": g("coinbase_prem", "", "latest"),
         "fear_greed": g("fear_greed", "", "latest"),
         "event_quiet": db.get_meta("event_quiet_active", "") or "",
-        "mark_price": mark_price_of(symbol),
+        "mark_price": px,
     }
+    snap.update(_wall_snap(symbol, px))
+    return snap

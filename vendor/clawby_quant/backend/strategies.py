@@ -205,43 +205,87 @@ class S06CvdFade(Base):
             gap_ll = (s[-1] - min(s[:-1])) / rng * 100
             depth = await ctx.depth_ratio(sym)
             if price_hh and gap_hh >= self.p["div_gap_pct"] and depth <= 1 / self.p["ask_bid_min"]:
-                if self._has_wall(wall, price, "ask"):
-                    out.append(Signal(self.sid, sym, "short",
-                                      f"价格新高但CVD落后{gap_hh:.0f}%+卖压+上方卖墙",
+                ok, wall_tag, wall_detail = self._check_wall(wall, price, "ask", sym)
+                if ok:
+                    reason = (f"价格新高但CVD落后{gap_hh:.0f}%+卖压+{wall_tag}"
+                              f"{(':' + wall_detail) if wall_detail else ''}")
+                    log.info("S06 entry short %s gap=%.1f depth=%.3f wall=%s %s",
+                             sym, gap_hh, depth, wall_tag, wall_detail or "")
+                    db.log("info", f"S06信号 short {sym} wall={wall_tag} {wall_detail}".strip())
+                    out.append(Signal(self.sid, sym, "short", reason,
                                       stop_price=price + 1.0 * atr,
                                       take_profit=price - 1.2 * atr,
                                       size_mult=self.p["size_mult"],
                                       max_hold_sec=self.max_hold))
+                else:
+                    log.info("S06 skip short %s: CVD/depth ok but wall miss (%s)",
+                             sym, wall_detail or wall_tag)
+                    db.log("info", f"S06跳过 short {sym}: 无合格卖墙 ({wall_detail or wall_tag})")
             elif price_ll and gap_ll >= self.p["div_gap_pct"] and depth >= self.p["ask_bid_min"]:
-                if self._has_wall(wall, price, "bid"):
-                    out.append(Signal(self.sid, sym, "long",
-                                      f"价格新低但CVD抬升{gap_ll:.0f}%+买撑+下方买墙",
+                ok, wall_tag, wall_detail = self._check_wall(wall, price, "bid", sym)
+                if ok:
+                    reason = (f"价格新低但CVD抬升{gap_ll:.0f}%+买撑+{wall_tag}"
+                              f"{(':' + wall_detail) if wall_detail else ''}")
+                    log.info("S06 entry long %s gap=%.1f depth=%.3f wall=%s %s",
+                             sym, gap_ll, depth, wall_tag, wall_detail or "")
+                    db.log("info", f"S06信号 long {sym} wall={wall_tag} {wall_detail}".strip())
+                    out.append(Signal(self.sid, sym, "long", reason,
                                       stop_price=price - 1.0 * atr,
                                       take_profit=price + 1.2 * atr,
                                       size_mult=self.p["size_mult"],
                                       max_hold_sec=self.max_hold))
+                else:
+                    log.info("S06 skip long %s: CVD/depth ok but wall miss (%s)",
+                             sym, wall_detail or wall_tag)
+                    db.log("info", f"S06跳过 long {sym}: 无合格买墙 ({wall_detail or wall_tag})")
         return out
 
-    def _has_wall(self, wall, price, side):
+    def _check_wall(self, wall, price, side, symbol=""):
+        """Return (ok, tag, detail). Soft-pass still allows entry but tags clearly."""
+        want = "上方卖墙" if side == "ask" else "下方买墙"
         if not wall:
-            return True  # wall data unavailable -> don't block, size is halved anyway
+            tag = f"{want}缺失软放行"
+            detail = "ob_wall=None"
+            log.warning("S06 %s %s: %s", symbol, tag, detail)
+            return True, tag, detail
         orders = wall.get("orders") or []
         if not isinstance(orders, list) or not orders:
-            return True
+            tag = f"{want}空列表软放行"
+            detail = f"orders=0 thr={wall.get('threshold_usd')}"
+            log.warning("S06 %s %s: %s", symbol, tag, detail)
+            return True, tag, detail
         rng = self.p["wall_range_pct"] / 100
+        nearest = None
         for o in orders:
             try:
                 p = float(o.get("price") or 0)
                 o_side = str(o.get("side") or o.get("type") or "").lower()
+                notional = float(o.get("notional") or 0)
             except (TypeError, ValueError):
                 continue
             is_ask = o_side in ("ask", "sell", "s")
             is_bid = o_side in ("bid", "buy", "b")
-            if side == "ask" and is_ask and p > price and (p - price) / price <= rng:
-                return True
-            if side == "bid" and is_bid and p < price and (price - p) / price <= rng:
-                return True
-        return False
+            if side == "ask" and is_ask and p > price:
+                dist = (p - price) / price
+                if nearest is None or dist < nearest[0]:
+                    nearest = (dist, p, notional)
+                if dist <= rng:
+                    detail = f"px={p:.6g} dist={dist*100:.2f}% n={notional:.0f}U"
+                    return True, want, detail
+            if side == "bid" and is_bid and p < price:
+                dist = (price - p) / price
+                if nearest is None or dist < nearest[0]:
+                    nearest = (dist, p, notional)
+                if dist <= rng:
+                    detail = f"px={p:.6g} dist={dist*100:.2f}% n={notional:.0f}U"
+                    return True, want, detail
+        if nearest:
+            detail = (f"最近墙 px={nearest[1]:.6g} dist={nearest[0]*100:.2f}% "
+                      f"> {self.p['wall_range_pct']}% n={nearest[2]:.0f}U "
+                      f"orders={len(orders)}")
+        else:
+            detail = f"无同侧墙 orders={len(orders)}"
+        return False, f"无合格{want}", detail
 
 
 # ── S11 高频接针(暴跌/暴涨清算捕捉)─────────────────────────────────────────

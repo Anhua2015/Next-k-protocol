@@ -164,6 +164,9 @@ async def scan_loop():
                     qty = risk.position_qty(sig, scfg, equity_cache, cfg_global, price)
                     leverage = int((scfg.get("risk") or {}).get("leverage")
                                    or cfg_global.get("max_gross_leverage", 3))
+                    log.info("signal fire %s %s %s qty=%.6g @ %.6g | %s%s",
+                             sig.strategy, sig.symbol, sig.side, qty or 0, price or 0,
+                             sig.reason, f" | {note}" if note else "")
                     pid = await executor.open_position(sig, qty, price, leverage)
                     db.log_signal(sig.strategy, sig.symbol, sig.side, sig.reason,
                                   bool(pid), note if pid else (note or "执行失败/资金不足"))
