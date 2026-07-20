@@ -121,13 +121,13 @@ class S02LiqRebound(Base):
         "logic": "密集多头爆仓是清算引擎的被迫卖出而非新增看空共识,爆仓峰值后价格常超调,瀑布衰减确认后快速回填。",
         "entry": "1h多头爆仓 ≥ 7日均值6倍 + 30分钟急跌 + 爆仓单流10分钟内衰减≥70% + 买盘深度回补(bid/ask≥1.1) → 市价开多",
         "exit": "反弹至跌幅0.5回撤位止盈;新低0.6×ATR止损;最长持仓 4h",
-        "factors": "liq_agg · liq_orders · 5m K线 · 订单簿深度 · ATR",
+        "factors": "liq_agg · liq_orders(OKX/Bitget补齐) · 5m K线 · 订单簿深度 · ATR（其余币安内置）",
         "risk": "接飞刀策略——瀑布仍在放大时绝不入场;交易所级黑天鹅直接熔断不接",
         "name_en": "Liq-Cascade Rebound",
         "logic_en": "Dense long liquidations are forced selling by the liquidation engine, not fresh bearish consensus; price overshoots at the cascade peak and refills fast once the cascade decays.",
         "entry_en": "1h long liqs >= 6x 7d avg + 30m sharp drop + liq order flow decaying >=70% within 10m + bid depth refilled (bid/ask >= 1.1) -> market long",
         "exit_en": "TP at 0.5 retrace of the drop; SL 0.6xATR under the low; max hold 4h",
-        "factors_en": "liq_agg / liq_orders / 5m klines / orderbook depth / ATR",
+        "factors_en": "liq_agg / liq_orders (OKX/Bitget) / 5m klines / depth / ATR (Binance otherwise)",
         "risk_en": "Knife-catching: never enter while the cascade is still expanding; exchange-level black swans are halted, not caught",
     }
 
@@ -173,13 +173,13 @@ class S06CvdFade(Base):
         "logic": "价格靠稀薄挂单打出新高但主动买量(CVD)不创新高 = 推手是挂单撤退而非真实买盘,背离后大概率回摆。",
         "entry": "价格创4h新高但CVD落后前高≥15% + 卖压比≥1.3 + 上方1%内有大额卖墙 → 开空(镜像开多);仓位减半",
         "exit": "回归1h VWAP止盈;卖墙被吃掉止损(逻辑失效);最长持仓 6h",
-        "factors": "cvd · ob_wall · 订单簿深度 · 1h K线",
+        "factors": "cvd · ob_wall · 订单簿深度 · 1h K线（均为币安内置）",
         "risk": "背离可以持续背离——单笔风险减半,靠高胜率小止损盈利",
         "name_en": "CVD Divergence Fade",
         "logic_en": "New price highs on thin books without new CVD highs mean the move is ask-side retreat, not real buying; the divergence usually snaps back.",
         "entry_en": "Price makes a 4h high but CVD lags >=15% + sell pressure >=1.3 + a large ask wall within 1% above -> short (mirrored long); half size",
         "exit_en": "TP at 1h VWAP; SL when the wall gets eaten (thesis invalid); max hold 6h",
-        "factors_en": "cvd / ob_wall / orderbook depth / 1h klines",
+        "factors_en": "cvd / ob_wall / orderbook depth / 1h klines (Binance-native)",
         "risk_en": "Divergence can keep diverging: half size per trade, profit via high win-rate small stops",
     }
 
@@ -226,17 +226,22 @@ class S06CvdFade(Base):
         if not wall:
             return True  # wall data unavailable -> don't block, size is halved anyway
         orders = wall.get("orders") or []
+        if not isinstance(orders, list) or not orders:
+            return True
         rng = self.p["wall_range_pct"] / 100
-        for o in orders if isinstance(orders, list) else []:
+        for o in orders:
             try:
                 p = float(o.get("price") or 0)
                 o_side = str(o.get("side") or o.get("type") or "").lower()
             except (TypeError, ValueError):
                 continue
-            if side == "ask" and p > price and (p - price) / price <= rng and "sell" in o_side or \
-               side == "bid" and p < price and (price - p) / price <= rng and "buy" in o_side:
+            is_ask = o_side in ("ask", "sell", "s")
+            is_bid = o_side in ("bid", "buy", "b")
+            if side == "ask" and is_ask and p > price and (p - price) / price <= rng:
                 return True
-        return not orders  # empty list -> permissive
+            if side == "bid" and is_bid and p < price and (price - p) / price <= rng:
+                return True
+        return False
 
 
 # ── S11 高频接针(暴跌/暴涨清算捕捉)─────────────────────────────────────────
@@ -252,13 +257,13 @@ class S11CrashScalp(Base):
         "entry": "观察窗口(默认30s)内跌幅≥1.2% 且 近3s刀势减缓(近端幅度≤窗口幅度×0.4)→ 市价接多;"
                  "暴涨镜像接空。爆仓倍数因子可用时作为增强确认。同币有冷却期防止一波反复进。",
         "exit": "反弹/回落 0.6% 自动止盈(核心);继续恶化 0.8% 止损;浮盈过半且秒级动能反转 → 提前止盈;最长持仓 2h。",
-        "factors": "WebSocket 逐笔价格(秒级速度)· liq_agg 爆仓倍数(确认)· 订单簿深度",
+        "factors": "WebSocket 逐笔价格(币安秒级)· liq_agg 爆仓倍数(OKX/Bitget补齐)· 订单簿深度",
         "risk": "接飞刀本质高风险——严格小止损+秒级监控;黑天鹅单边时靠 0.8% 止损和全局熔断兜底,不加仓不扛单。",
         "name_en": "HF Crash Scalp",
         "logic_en": "Crashes force-liquidate leverage and the forced flow overshoots price. Watch second-level tick velocity and catch the reversal the moment the knife decelerates: quick in, quick out.",
         "entry_en": "Window move >= threshold and the last 3s decelerated (<= decel x window pace) -> market entry against the move; per-coin cooldown",
         "exit_en": "TP +0.6% on the bounce (core); SL 0.8%; early exit when second-level momentum flips past half target; max hold 2h",
-        "factors_en": "WebSocket tick velocity / liq_agg confirmation / orderbook depth",
+        "factors_en": "Binance tick WS / liq_agg (OKX/Bitget) / orderbook depth",
         "risk_en": "Inherently risky knife-catching: strict small stops + second-level monitoring; black swans covered by the 0.8% stop and global halt; never add to losers",
     }
 
@@ -357,13 +362,13 @@ class S14VwapRevert(Base):
                  "偏离越大、taker 流越衰竭,回归赔率越好。",
         "entry": "|price/VWAP60 − 1| ≥ dev_pct 且 taker 买卖比确认推动力衰竭(超买时 taker≤阈值,超卖镜像)→ 反向开仓。",
         "exit": "回归至偏离的 exit_frac 处止盈;继续偏离 0.8×dev 止损;最长持仓 45 分钟。",
-        "factors": "1m K线(VWAP60)· taker_flow",
+        "factors": "1m K线(VWAP60)· taker_flow（均为币安官方）",
         "risk": "趋势日的持续偏离是主要风险——taker 衰竭过滤 + 偏离基础上的固定止损,严禁摊平。",
         "name_en": "VWAP Deviation Revert",
         "logic_en": "Excess deviation from the 60m volume-weighted average price mean-reverts once the driving taker flow exhausts; bigger deviation with drier flow = better odds.",
         "entry_en": "|price/VWAP60 - 1| >= dev threshold with taker flow confirming exhaustion -> enter against the deviation",
         "exit_en": "TP at exit_frac of the deviation back to VWAP; SL at 0.8x further deviation; max hold 45m",
-        "factors_en": "1m klines (VWAP60) / taker_flow",
+        "factors_en": "1m klines (VWAP60) / taker_flow (Binance-native)",
         "risk_en": "Trend days keep deviating: taker exhaustion filter + hard stop beyond the deviation, never average down",
     }
 

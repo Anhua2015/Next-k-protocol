@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 
-from . import binance, clawby, config, db
+from . import binance, bitget_market, clawby, config, db, okx_market
 
 log = logging.getLogger("factors")
 
@@ -72,7 +72,7 @@ async def f_taker_flow(symbol):
     if not rows:
         return None
     series = [float(r["buySellRatio"]) for r in rows]
-    return {"latest": series[-1], "series": series}
+    return {"latest": series[-1], "series": series, "source": "binance"}
 
 
 async def f_oi_binance(symbol):
@@ -95,34 +95,19 @@ async def f_oi_agg(symbol):
 
 
 async def f_liq_agg(symbol):
-    data = await clawby.relay_safe(
-        "futures_liquidation_aggregated_history",
-        {"exchange_list": "Binance,OKX,Bybit", "symbol": _coin(symbol),
-         "interval": "1h", "limit": 168})
-    if not data:
-        return None
-    longs = [float(d.get("aggregated_long_liquidation_usd")
-                   or d.get("longLiquidationUsd") or d.get("long") or 0) for d in data]
-    shorts = [float(d.get("aggregated_short_liquidation_usd")
-                    or d.get("shortLiquidationUsd") or d.get("short") or 0) for d in data]
-    avg_l = sum(longs[:-1]) / max(len(longs) - 1, 1)
-    avg_s = sum(shorts[:-1]) / max(len(shorts) - 1, 1)
-    return {"long_1h": longs[-1], "short_1h": shorts[-1],
-            "long_mult": longs[-1] / avg_l if avg_l else 0,
-            "short_mult": shorts[-1] / avg_s if avg_s else 0}
+    """Hourly long/short liquidation USD — OKX first, Bitget fallback."""
+    out = await okx_market.liq_agg(symbol)
+    if out is not None:
+        return out
+    return await bitget_market.liq_agg(symbol)
 
 
 async def f_liq_orders(symbol):
-    data = await clawby.relay_safe(
-        "futures_liquidation_order",
-        {"exchange": "Binance", "symbol": symbol, "min_liquidation_amount": 100000})
-    if data is None:
-        return None
-    rows = data if isinstance(data, list) else []
-    now_ms = time.time() * 1000
-    recent = [r for r in rows if now_ms - float(r.get("time") or r.get("ts") or 0) < 600_000]
-    older = [r for r in rows if 600_000 <= now_ms - float(r.get("time") or r.get("ts") or 0) < 1_800_000]
-    return {"n_10m": len(recent), "n_prev_20m": len(older)}
+    """Large liquidation count in 10m / prior 20m — OKX first, Bitget fallback."""
+    out = await okx_market.liq_orders(symbol)
+    if out is not None:
+        return out
+    return await bitget_market.liq_orders(symbol)
 
 
 async def f_liq_map(symbol):
@@ -132,23 +117,55 @@ async def f_liq_map(symbol):
 
 
 async def f_ob_wall(symbol):
-    data = await clawby.relay_safe("futures_orderbook_large_limit_order",
-                                   {"exchange": "Binance", "symbol": symbol})
-    if data is None:
+    """Top-decile notional levels from Binance order book (no Clawby)."""
+    try:
+        d = await binance.depth(symbol, 100)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ob_wall %s: %s", symbol, exc)
         return None
-    return {"orders": data if isinstance(data, list) else data}
+    bids = d.get("bids") or []
+    asks = d.get("asks") or []
+    notionals = []
+    parsed = []
+    for side, levels in (("buy", bids), ("sell", asks)):
+        for row in levels:
+            try:
+                px, qty = float(row[0]), float(row[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            n = px * qty
+            notionals.append(n)
+            parsed.append((side, px, qty, n))
+    if not parsed:
+        return {"orders": [], "source": "binance"}
+    notionals.sort()
+    idx = max(0, int((len(notionals) - 1) * 0.9))
+    threshold = max(50_000.0, notionals[idx])
+    orders = [
+        {"side": side, "price": px, "qty": qty, "notional": round(n, 2)}
+        for side, px, qty, n in parsed if n >= threshold
+    ]
+    orders.sort(key=lambda o: -o["notional"])
+    return {"orders": orders[:40], "threshold_usd": threshold, "source": "binance"}
 
 
 async def f_cvd(symbol):
-    data = await clawby.relay_safe("futures_cvd_history",
-                                   {"exchange": "Binance", "symbol": symbol,
-                                    "interval": "1h", "limit": 48})
-    if not data:
+    """CVD from Binance 1h klines: cum(2*taker_buy - volume)."""
+    try:
+        ks = await binance.klines(symbol, "1h", 48)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("cvd %s: %s", symbol, exc)
         return None
-    # upstream field is cum_vol_delta (close/cvd kept for compatibility)
-    vals = [float(d.get("cum_vol_delta") or d.get("close") or d.get("cvd") or 0)
-            for d in data]
-    return {"latest": vals[-1], "series": vals}
+    if not ks:
+        return None
+    series = []
+    cum = 0.0
+    for k in ks:
+        vol = float(k.get("volume") or 0)
+        tb = float(k.get("taker_buy_base") or 0)
+        cum += (2.0 * tb - vol)
+        series.append(cum)
+    return {"latest": series[-1], "series": series, "source": "binance"}
 
 
 async def f_coinbase_prem(_):
@@ -536,15 +553,15 @@ REGISTRY = [
     ("mark_all",      30,    False, f_mark_all,      "标记价/基差快照",   "Binance官方", "Mark price/basis snapshot"),
     ("taker_flow",    300,   True,  f_taker_flow,    "主动买卖比",        "Binance官方", "Taker buy/sell ratio"),
     ("oi_binance",    300,   True,  f_oi_binance,    "持仓量OI",          "Binance官方", "Open interest (OI)"),
-    ("liq_agg",       300,   True,  f_liq_agg,       "聚合爆仓量",        "Clawby", "Aggregated liquidations"),
-    ("liq_orders",    300,   True,  f_liq_orders,    "大额爆仓单流",      "Clawby", "Large liq order flow"),
-    ("ob_wall",       300,   True,  f_ob_wall,       "大额挂单墙",        "Clawby", "Large limit-order walls"),
+    ("liq_agg",       300,   True,  f_liq_agg,       "聚合爆仓量",        "OKX补齐", "OKX liquidations (Bitget fallback)"),
+    ("liq_orders",    300,   True,  f_liq_orders,    "大额爆仓单流",      "OKX补齐", "Large liq flow (OKX/Bitget)"),
+    ("ob_wall",       300,   True,  f_ob_wall,       "大额挂单墙",        "Binance内置", "Orderbook walls"),
     ("funding_agg",   900,   True,  f_funding_agg,   "OI加权聚合费率",    "Clawby", "OI-weighted funding"),
     ("funding_xsec",  900,   False, f_funding_xsec,  "全网费率快照",      "Clawby", "Cross-exchange funding"),
     ("lsr_global",    900,   True,  f_lsr_global,    "全局多空人数比",    "Binance官方", "Global long/short accounts"),
     ("lsr_top_pos",   900,   True,  f_lsr_top_pos,   "大户多空持仓比",    "Binance官方", "Top traders position L/S"),
     ("oi_agg",        900,   True,  f_oi_agg,        "全网聚合OI",        "Clawby", "Aggregated OI (all venues)"),
-    ("cvd",           900,   True,  f_cvd,           "累积成交量差CVD",   "Clawby", "Cumulative volume delta"),
+    ("cvd",           900,   True,  f_cvd,           "累积成交量差CVD",   "Binance内置", "CVD from futures klines"),
     ("coinbase_prem", 900,   False, f_coinbase_prem, "Coinbase溢价",      "Clawby", "Coinbase premium"),
     ("exch_chain_tx", 900,   False, f_exch_chain_tx, "交易所大额出入金",  "Clawby", "Exchange on-chain flows"),
     ("whale_tx",      900,   False, f_whale_tx,      "链上鲸鱼转账",      "Clawby", "Whale transfers"),

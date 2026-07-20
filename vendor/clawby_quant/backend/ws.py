@@ -2,9 +2,11 @@
 
 <symbol>@bookTicker gives tick-level best bid/ask; mid = (bid+ask)/2 feeds the
 0.5s position loop AND a rolling per-symbol price history so the high-frequency
-crash/spike strategy (S11) can measure sub-second velocity — the true
-second-level signal that minute-level liquidation data cannot provide.
+crash/spike strategy (S11) can measure sub-second velocity.
 Reconnects on drop and when the universe changes.
+
+Liquidations are not collected here — Binance REST allForceOrders is retired;
+liq_agg / liq_orders use OKX (primary) / Bitget (fallback) REST instead.
 """
 import asyncio
 import json
@@ -82,6 +84,9 @@ async def ws_loop():
     backoff = 1
     while True:
         subscribed = list(config.UNIVERSE)
+        if not subscribed:
+            await asyncio.sleep(2)
+            continue
         try:
             async with websockets.connect(_stream_url(subscribed), ping_interval=20,
                                           close_timeout=5) as conn:
@@ -98,7 +103,6 @@ async def ws_loop():
                             mid = (bid + ask) / 2
                             PRICES[sym] = {"mark": mid, "bid": bid, "ask": ask, "ts": time.time()}
                             _record(sym, mid)
-                    # universe changed -> reconnect with the new subscription
                     if set(config.UNIVERSE) != set(subscribed):
                         log.info("universe changed — reconnecting stream")
                         break

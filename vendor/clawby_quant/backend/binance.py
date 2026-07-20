@@ -43,11 +43,13 @@ async def _signed(method, base, path, params=None, timeout=15):
 # -- public market data (futures) -------------------------------------------
 
 async def klines(symbol, interval="1m", limit=200):
-    """Futures klines -> list of dicts (ts, open, high, low, close, volume)."""
+    """Futures klines -> list of dicts (ts, OHLCV, taker_buy_base)."""
     raw = await _get(FUT, "/fapi/v1/klines",
                      {"symbol": symbol, "interval": interval, "limit": limit})
     return [{"ts": int(k[0] // 1000), "open": float(k[1]), "high": float(k[2]),
-             "low": float(k[3]), "close": float(k[4]), "volume": float(k[5])}
+             "low": float(k[3]), "close": float(k[4]), "volume": float(k[5]),
+             "quote_volume": float(k[7]), "taker_buy_base": float(k[9]),
+             "taker_buy_quote": float(k[10])}
             for k in raw]
 
 
