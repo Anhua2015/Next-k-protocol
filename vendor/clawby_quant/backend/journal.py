@@ -63,6 +63,19 @@ def _iso(ts):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)) if ts else None
 
 
+def clear_files():
+    """Delete all trades-*.jsonl journal files. Returns count removed."""
+    _ensure_dir()
+    n = 0
+    for path in JOURNAL_DIR.glob("trades-*.jsonl"):
+        try:
+            path.unlink()
+            n += 1
+        except OSError as exc:
+            log.warning("journal unlink %s failed: %s", path, exc)
+    return n
+
+
 def record_close(pos, close_price, pnl, fee, close_reason, exit_factors, mode):
     """Append one journal line for a closed position. Never raises."""
     try:

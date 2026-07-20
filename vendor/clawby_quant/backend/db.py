@@ -310,3 +310,39 @@ def prune():
     with _lock, _conn:
         _conn.execute("DELETE FROM factor_history WHERE ts<?", (cutoff,))
         _conn.execute("DELETE FROM logs WHERE ts<?", (cutoff,))
+
+
+def reset_paper():
+    """Wipe paper trading state so a fresh run can start.
+
+    Clears paper positions/trades/equity, signals, app logs, halt/cooldown meta,
+    and resets paper_balance. Does NOT touch live rows, factors, credentials,
+    or strategies.yaml.
+    """
+    start = float(config.PAPER_START_BALANCE)
+    deleted = {"positions": 0, "trades": 0, "equity": 0, "signals": 0, "logs": 0, "meta": 0}
+    with _lock, _conn:
+        cur = _conn.execute(
+            "DELETE FROM positions WHERE IFNULL(mode,'') IN ('','paper')")
+        deleted["positions"] = cur.rowcount
+        cur = _conn.execute(
+            "DELETE FROM trades WHERE IFNULL(mode,'') IN ('','paper')")
+        deleted["trades"] = cur.rowcount
+        cur = _conn.execute(
+            "DELETE FROM equity_curve WHERE IFNULL(mode,'') IN ('','paper')")
+        deleted["equity"] = cur.rowcount
+        cur = _conn.execute("DELETE FROM signals")
+        deleted["signals"] = cur.rowcount
+        cur = _conn.execute("DELETE FROM logs")
+        deleted["logs"] = cur.rowcount
+        rows = _conn.execute("SELECT key FROM meta").fetchall()
+        for row in rows:
+            k = row["key"]
+            if k in ("paper_balance", "halt_until", "event_quiet_active", "last_error") \
+                    or k.startswith("s11_cd:"):
+                _conn.execute("DELETE FROM meta WHERE key=?", (k,))
+                deleted["meta"] += 1
+        _conn.execute("REPLACE INTO meta(key,value) VALUES('paper_balance',?)",
+                      (str(start),))
+        _conn.execute("REPLACE INTO meta(key,value) VALUES('mode','paper')")
+    return {"paper_balance": start, "deleted": deleted}

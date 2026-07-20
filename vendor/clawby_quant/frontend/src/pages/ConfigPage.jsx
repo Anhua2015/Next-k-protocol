@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import {
   Card, Row, Col, Input, Button, message, Descriptions, Tag, Space,
-  Select, Alert, Radio,
+  Select, Alert, Radio, Modal,
 } from 'antd'
 import { api, apiPath, fmtUsd } from '../api'
 import { useI18n } from '../i18n'
@@ -184,12 +184,55 @@ function UniverseConfig() {
   )
 }
 
+function PaperReset() {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const onOk = async () => {
+    if (text.trim() !== 'RESET') {
+      message.error(t('config.resetBad'))
+      return
+    }
+    setBusy(true)
+    try {
+      const r = await api.resetPaper('RESET')
+      message.success(`${t('config.resetOk')} (余额 ${r.paper_balance})`)
+      setOpen(false)
+      setText('')
+    } catch (e) {
+      message.error(e.message || t('config.resetFail'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card size="small" title={t('config.resetTitle')}>
+      <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+             message={t('config.resetHint')} />
+      <Button danger onClick={() => setOpen(true)}>{t('config.resetBtn')}</Button>
+      <Modal open={open} title={t('config.resetTitle')}
+             okText={t('config.resetConfirm')} cancelText={t('common.cancel')}
+             okButtonProps={{ danger: true, loading: busy }}
+             onCancel={() => { setOpen(false); setText('') }}
+             onOk={onOk}>
+        <p style={{ marginBottom: 8 }}>{t('config.resetDesc')}</p>
+        <Input value={text} onChange={(e) => setText(e.target.value)}
+               placeholder="RESET" autoFocus />
+      </Modal>
+    </Card>
+  )
+}
+
 export default function ConfigPage() {
   return (
     <Row gutter={[12, 12]}>
       <Col span={24}><Credentials /></Col>
       <Col span={24}><ExecutorExchange /></Col>
       <Col span={24}><UniverseConfig /></Col>
+      <Col span={24}><PaperReset /></Col>
     </Row>
   )
 }

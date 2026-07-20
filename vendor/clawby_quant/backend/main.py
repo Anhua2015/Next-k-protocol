@@ -358,6 +358,20 @@ async def api_mode(payload: dict):
     return {"ok": True, "mode": m}
 
 
+@app.post("/api/paper/reset")
+async def api_paper_reset(payload: dict):
+    """Wipe paper book + journal so a fresh paper run can start. Live data kept."""
+    if payload.get("confirm") != "RESET":
+        raise HTTPException(400, "resetting paper requires confirm=RESET")
+    from . import journal as journal_mod
+    stats = db.reset_paper()
+    journal_n = journal_mod.clear_files()
+    stats["journal_files"] = journal_n
+    db.log("warn", f"纸面数据已重置 balance={stats['paper_balance']} "
+                   f"deleted={stats['deleted']} journal_files={journal_n}")
+    return {"ok": True, **stats}
+
+
 @app.get("/api/klines")
 async def api_klines(symbol: str = "BTCUSDT", interval: str = "15m", limit: int = 200):
     ks = await binance.klines(symbol, interval, limit)
