@@ -1,4 +1,4 @@
-import React from 'react'
+﻿import React from 'react'
 import { Card, Table, Tabs, Tag, Typography } from 'antd'
 import { fmtPnl } from '../api'
 import { useI18n } from '../i18n'
@@ -30,7 +30,7 @@ export default function ActivityTabs({ signals, trades, logs }) {
     { title: t('dash.col.qty'), dataIndex: 'qty', width: 80, render: (v) => v?.toPrecision(4) },
     { title: t('journal.col.pnl'), dataIndex: 'pnl', width: 80,
       render: (v) => v == null ? '-' :
-        <span style={{ color: v >= 0 ? '#00b96b' : '#e5484d' }}>{fmtPnl(v)}</span> },
+        <span style={{ color: v >= 0 ? '#2F8A52' : '#C24B45' }}>{fmtPnl(v)}</span> },
     { title: t('journal.col.mode'), dataIndex: 'mode', width: 60,
       render: (v) => <Tag color={v === 'live' ? 'red' : 'blue'} style={{ fontSize: 10 }}>{v}</Tag> },
   ]

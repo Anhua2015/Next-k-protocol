@@ -1,4 +1,4 @@
-import React from 'react'
+﻿import React from 'react'
 import {
   Card, Table, Select, Button, Space, Tag, Typography, Descriptions, message,
 } from 'antd'
@@ -80,13 +80,13 @@ export default function JournalPage() {
       render: (v) => <span style={{ fontSize: 12 }}>{Number(v).toPrecision(6)}</span> },
     { title: t('journal.col.pnl'), dataIndex: 'pnl', width: 88, align: 'right',
       sorter: (a, b) => (a.pnl || 0) - (b.pnl || 0),
-      render: (v) => <b style={{ color: v >= 0 ? '#00b96b' : '#e5484d', fontSize: 12 }}>{v >= 0 ? '+' : ''}{Number(v).toFixed(2)}U</b> },
+      render: (v) => <b style={{ color: v >= 0 ? '#2F8A52' : '#C24B45', fontSize: 12 }}>{v >= 0 ? '+' : ''}{Number(v).toFixed(2)}U</b> },
     { title: t('journal.col.pnlPct'), dataIndex: 'pnl_pct', width: 76, align: 'right',
-      render: (v) => <span style={{ color: v >= 0 ? '#00b96b' : '#e5484d', fontSize: 12 }}>{fmtPct(v)}</span> },
+      render: (v) => <span style={{ color: v >= 0 ? '#2F8A52' : '#C24B45', fontSize: 12 }}>{fmtPct(v)}</span> },
     { title: t('journal.col.hold'), dataIndex: 'hold_minutes', width: 72, align: 'right',
       render: (v) => <span style={{ fontSize: 12 }}>{v >= 60 ? `${(v / 60).toFixed(1)}h` : `${Math.round(v)}m`}</span> },
     { title: 'MFE/MAE', key: 'mfemae', width: 108, align: 'right',
-      render: (_, r) => <span style={{ fontSize: 11 }}><span style={{ color: '#00b96b' }}>{fmtPct(r.mfe_pct)}</span> / <span style={{ color: '#e5484d' }}>{fmtPct(r.mae_pct)}</span></span> },
+      render: (_, r) => <span style={{ fontSize: 11 }}><span style={{ color: '#2F8A52' }}>{fmtPct(r.mfe_pct)}</span> / <span style={{ color: '#C24B45' }}>{fmtPct(r.mae_pct)}</span></span> },
     { title: t('journal.col.reason'), dataIndex: 'close_reason', width: 128,
       render: (v) => <span style={{ fontSize: 12 }}>{v}</span> },
     { title: t('journal.col.mode'), dataIndex: 'mode', width: 64,
@@ -114,7 +114,7 @@ export default function JournalPage() {
               {rows.length > 0 && (
                 <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
                   {rows.length}{t('journal.stats.trades')} · {t('journal.stats.wr')} {((wins / rows.length) * 100).toFixed(0)}% · {t('journal.stats.total')}
-                  <span style={{ color: pnlSum >= 0 ? '#00b96b' : '#e5484d' }}>
+                  <span style={{ color: pnlSum >= 0 ? '#2F8A52' : '#C24B45' }}>
                     {' '}{pnlSum >= 0 ? '+' : ''}{pnlSum.toFixed(2)}U
                   </span>
                 </Text>

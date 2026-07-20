@@ -1,4 +1,4 @@
-import React from 'react'
+﻿import React from 'react'
 import { Card, Table, Tag, Progress, Typography, Button, Popconfirm, message } from 'antd'
 import { apiPath, fmtDur, fmtPnl } from '../api'
 import { useI18n } from '../i18n'
@@ -38,13 +38,13 @@ export default function PositionsTable({ positions, onChanged }) {
     { title: t('dash.col.mark'), dataIndex: 'mark_price', render: (v) => v?.toPrecision(6) },
     { title: t('dash.col.qty'), dataIndex: 'qty', render: (v) => v?.toPrecision(4) },
     { title: t('dash.col.upnl'), dataIndex: 'unrealized_pnl',
-      render: (v) => <span style={{ color: v >= 0 ? '#00b96b' : '#e5484d' }}>{fmtPnl(v)}</span> },
+      render: (v) => <span style={{ color: v >= 0 ? '#2F8A52' : '#C24B45' }}>{fmtPnl(v)}</span> },
     { title: t('dash.col.excursion'), key: 'excursion', width: 120,
       render: (_, r) => (
         <span style={{ fontSize: 11.5 }}>
-          <span style={{ color: '#00b96b' }}>+{(r.mfe_pct || 0).toFixed(2)}%</span>
+          <span style={{ color: '#2F8A52' }}>+{(r.mfe_pct || 0).toFixed(2)}%</span>
           {' / '}
-          <span style={{ color: '#e5484d' }}>{(r.mae_pct || 0).toFixed(2)}%</span>
+          <span style={{ color: '#C24B45' }}>{(r.mae_pct || 0).toFixed(2)}%</span>
         </span>
       ) },
     { title: t('dash.col.age'), key: 'age', width: 160,
@@ -53,7 +53,7 @@ export default function PositionsTable({ positions, onChanged }) {
         return (
           <div>
             <Progress percent={pct} size="small" showInfo={false}
-                      strokeColor={pct > 80 ? '#e5484d' : '#00b96b'} />
+                      strokeColor={pct > 80 ? '#C24B45' : '#2F8A52'} />
             <Typography.Text type="secondary" style={{ fontSize: 11 }}>
               {fmtDur(r.age_sec)} / {fmtDur(r.max_hold_sec)}
             </Typography.Text>

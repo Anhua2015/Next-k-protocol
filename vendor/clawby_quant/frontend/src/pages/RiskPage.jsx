@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+﻿import React, { useState } from 'react'
 import {
   Card, Row, Col, Table, InputNumber, Button, message, Statistic,
   Tag, Alert,
@@ -109,7 +109,7 @@ export default function RiskPage() {
           <Card size="small">
             <Statistic title={t('dash.equity')} value={risk?.equity ?? '-'}
                        formatter={(v) => (v === '-' ? '-' : fmtUsd(Number(v)))}
-                       valueStyle={{ color: '#00b96b' }} />
+                       valueStyle={{ color: '#2F8A52' }} />
           </Card>
         </Col>
         <Col xs={24} md={16}>

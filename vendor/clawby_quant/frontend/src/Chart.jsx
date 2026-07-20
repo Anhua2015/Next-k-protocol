@@ -8,7 +8,7 @@ export default function Chart({ option, height = 260 }) {
 
   useEffect(() => {
     if (!ref.current) return
-    chartRef.current = echarts.init(ref.current, 'dark', { renderer: 'canvas' })
+    chartRef.current = echarts.init(ref.current, null, { renderer: 'canvas' })
     const ro = new ResizeObserver(() => chartRef.current?.resize())
     ro.observe(ref.current)
     return () => { ro.disconnect(); chartRef.current?.dispose() }

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+﻿import React, { useEffect, useMemo, useState } from 'react'
 import { Card, Segmented } from 'antd'
 import Chart from '../Chart'
 import { apiPath } from '../api'
@@ -29,14 +29,16 @@ export default function EquityChart({ activeMode }) {
     return {
       grid: { left: 60, right: 16, top: 24, bottom: 24 },
       tooltip: { trigger: 'axis' },
-      xAxis: { type: 'category', data: ts, axisLine: { lineStyle: { color: '#3a4553' } } },
-      yAxis: { type: 'value', scale: true, splitLine: { lineStyle: { color: '#1d2633' } } },
+      xAxis: { type: 'category', data: ts, axisLine: { lineStyle: { color: '#D5DBE3' } },
+        axisLabel: { color: '#858C97' } },
+      yAxis: { type: 'value', scale: true, splitLine: { lineStyle: { color: '#EBEEF2' } },
+        axisLabel: { color: '#858C97' } },
       series: [{
         name: t('dash.equityName'), type: 'line', data: eq, showSymbol: false, smooth: true,
-        lineStyle: { color: '#00b96b', width: 2 },
+        lineStyle: { color: '#2F8A52', width: 2 },
         areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-          colorStops: [{ offset: 0, color: 'rgba(0,185,107,0.25)' },
-                       { offset: 1, color: 'rgba(0,185,107,0)' }] } },
+          colorStops: [{ offset: 0, color: 'rgba(47,138,82,0.22)' },
+                       { offset: 1, color: 'rgba(47,138,82,0)' }] } },
       }],
     }
   }, [series, lang, t])

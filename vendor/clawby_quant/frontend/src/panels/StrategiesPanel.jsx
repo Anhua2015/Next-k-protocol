@@ -1,4 +1,4 @@
-import React from 'react'
+﻿import React from 'react'
 import {
   Card, Table, Switch, Tag, Typography, InputNumber, Input, Descriptions, Select,
   Button, Modal, Popconfirm, Space, message,
@@ -223,7 +223,7 @@ export default function StrategiesPanel({ data, universe, known, onToggle, onInt
         return (
           <span style={{ fontSize: 12 }}>
             {s.closed}{t('strat.trades')}·{t('strat.winRate')}{wr}%·
-            <span style={{ color: s.pnl >= 0 ? '#00b96b' : '#e5484d' }}>
+            <span style={{ color: s.pnl >= 0 ? '#2F8A52' : '#C24B45' }}>
               {s.pnl >= 0 ? '+' : ''}{s.pnl.toFixed(1)}U</span>
           </span>
         )

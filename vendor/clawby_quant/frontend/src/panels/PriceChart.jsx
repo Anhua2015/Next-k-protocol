@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+﻿import React, { useEffect, useMemo, useState } from 'react'
 import { Card, Select, Space } from 'antd'
 import Chart from '../Chart'
 import { api } from '../api'
@@ -36,7 +36,7 @@ export default function PriceChart({ universe }) {
       return {
         coord: [idx >= 0 ? idx : cat.length - 1, m.price],
         value: isOpen ? t('dash.openMark') : t('dash.closeMark'),
-        itemStyle: { color: isBuy ? '#00b96b' : '#e5484d' },
+        itemStyle: { color: isBuy ? '#2F8A52' : '#C24B45' },
         symbol: isOpen ? 'triangle' : 'circle',
         symbolRotate: isOpen && !isBuy ? 180 : 0,
         symbolSize: 11,
@@ -52,8 +52,8 @@ export default function PriceChart({ universe }) {
               { gridIndex: 1, axisLabel: { show: false }, splitLine: { show: false } }],
       series: [
         { name: symbol, type: 'candlestick', data: ohlc, xAxisIndex: 0, yAxisIndex: 0,
-          itemStyle: { color: '#00b96b', color0: '#e5484d',
-                       borderColor: '#00b96b', borderColor0: '#e5484d' },
+          itemStyle: { color: '#2F8A52', color0: '#C24B45',
+                       borderColor: '#2F8A52', borderColor0: '#C24B45' },
           markPoint: { data: marks, label: { fontSize: 9, color: '#fff' } } },
         { name: t('dash.volume'), type: 'bar', data: vols, xAxisIndex: 1, yAxisIndex: 1,
           itemStyle: { color: '#3a4553' } },
