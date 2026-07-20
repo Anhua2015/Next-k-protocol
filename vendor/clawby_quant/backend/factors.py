@@ -618,8 +618,39 @@ def get_interval(name, default):
         return default
 
 
+# Factors required by the four live strategies (S02/S06/S11/S14) + mark pricing.
+# Everything else defaults OFF to avoid Clawby / unused Binance poll pressure.
+ESSENTIAL_FACTORS = frozenset({
+    "mark_all",      # position mark / basis
+    "taker_flow",    # S14
+    "liq_agg",       # S02 / S11
+    "liq_orders",    # S02
+    "ob_wall",       # S06
+    "cvd",           # S06
+})
+
+
 def is_enabled(name):
-    return db.get_meta(f"factor_enabled:{name}", "1") == "1"
+    default = "1" if name in ESSENTIAL_FACTORS else "0"
+    return db.get_meta(f"factor_enabled:{name}", default) == "1"
+
+
+def apply_essential_defaults(force=False):
+    """Turn off non-essential factors once (or when force=True).
+
+    Existing DBs may have toggled everything on; this migration keeps only the
+    strategy-dependent set collecting.
+    """
+    flag = "factor_essentials_v1"
+    if not force and db.get_meta(flag, "") == "1":
+        return False
+    names = {r[0] for r in REGISTRY}
+    for name in names:
+        db.set_meta(f"factor_enabled:{name}", "1" if name in ESSENTIAL_FACTORS else "0")
+    db.set_meta(flag, "1")
+    log.info("factor collection limited to essentials: %s",
+             ", ".join(sorted(ESSENTIAL_FACTORS)))
+    return True
 
 
 def set_config(name, interval_sec=None, enabled=None):

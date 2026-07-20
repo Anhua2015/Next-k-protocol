@@ -32,6 +32,7 @@ DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
+    factors.apply_essential_defaults()
     tasks = [asyncio.create_task(ws.ws_loop()),
              asyncio.create_task(engine.scan_loop()),
              asyncio.create_task(engine.position_loop())]
