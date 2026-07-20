@@ -1,6 +1,7 @@
 """Reverse-proxy Next K 网格 (vendor/wangge → Bitget multi-symbol).
 
-Protocol keeps /api/binance/* /docs /redoc; everything else → grid UI on :8080
+Protocol keeps /api/binance/* /api/clawby-quant/* /clawby-ui/* /docs /redoc;
+everything else → grid UI on :8080
 (dashboard + /api/s/:SYM + /api/overview + /api/symbols + /api/ai|…).
 """
 
@@ -21,6 +22,8 @@ def _upstream() -> str:
 
 def _keep_on_protocol(path: str) -> bool:
     if path.startswith("/api/binance"):
+        return True
+    if path.startswith("/api/clawby-quant") or path.startswith("/clawby-ui"):
         return True
     if path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/openapi"):
         return True

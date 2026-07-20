@@ -15,3 +15,13 @@ logs/
 vendor/wangge/node_modules/
 vendor/wangge/.env
 vendor/wangge/logs/
+
+# clawby-quant vendor runtime
+!vendor/clawby_quant/frontend/dist/
+!vendor/clawby_quant/frontend/dist/**
+vendor/clawby_quant/node_modules/
+vendor/clawby_quant/frontend/node_modules/
+vendor/clawby_quant/.venv/
+vendor/clawby_quant/.env
+vendor/clawby_quant/quantbot.db
+vendor/clawby_quant/**/__pycache__/

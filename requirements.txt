@@ -9,6 +9,10 @@ pydantic>=2.5.0
 # Binance Futures REST
 httpx>=0.27.0
 
+# clawby-quant sidecar
+PyYAML>=6.0
+websockets>=12.0
+
 # Observability
 structlog>=24.0.0
 prometheus_client>=0.20.0
