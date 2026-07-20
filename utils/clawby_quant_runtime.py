@@ -91,6 +91,8 @@ def start_sidecar() -> dict[str, Any]:
         data_dir = (os.getenv("DATA_DIR") or "").strip()
         if data_dir:
             env.setdefault("QB_DB_PATH", str(Path(data_dir) / "clawby_quantbot.db"))
+            # Trade journal JSONL must survive redeploys (not under vendor/).
+            env.setdefault("QB_JOURNAL_DIR", str(Path(data_dir) / "clawby_quant_journal"))
 
         log_path = _sidecar_log_path()
         try:

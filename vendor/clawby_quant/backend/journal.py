@@ -1,9 +1,13 @@
 """Trade journal: one JSONL entry per closed trade with the full context an
 AI needs to optimize strategies later — entry/exit factor snapshots, MFE/MAE,
 signal reason, hold time. Files: journal/trades-YYYY-MM-DD.jsonl (UTC days).
+
+On Railway, set QB_JOURNAL_DIR (or QB_DB_PATH on a volume) so redeploys do not
+wipe history — default vendor/journal/ lives inside the ephemeral image.
 """
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -11,7 +15,20 @@ from . import config
 
 log = logging.getLogger("journal")
 
-JOURNAL_DIR = config.ROOT / "journal"
+
+def _resolve_journal_dir() -> Path:
+    env = (os.environ.get("QB_JOURNAL_DIR") or "").strip()
+    if env:
+        return Path(env)
+    # Keep journal next to the SQLite file when DB is on a persistent volume.
+    db = Path(config.DB_PATH)
+    if db.parent.resolve() != config.ROOT.resolve():
+        return db.parent / "clawby_quant_journal"
+    return config.ROOT / "journal"
+
+
+JOURNAL_DIR = _resolve_journal_dir()
+
 
 _FIELDS_DOC = """# 交易日记(机器可读,供 AI 策略优化)
 
