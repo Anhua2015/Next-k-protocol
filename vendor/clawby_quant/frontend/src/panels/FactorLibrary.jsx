@@ -23,11 +23,9 @@ function IntervalEditor({ row, onSave }) {
 export default function FactorLibrary({ factorsData }) {
   const { t, lang } = useI18n()
   const [rows, setRows] = useState([])
-  const [deps, setDeps] = useState(new Set())        // factors any strategy depends on
   const [search, setSearch] = useState('')
   const [srcFilter, setSrcFilter] = useState('')
   const [stateFilter, setStateFilter] = useState('')
-  const [depsFilter, setDepsFilter] = useState('')
 
   const fmtAge = (s) => {
     if (s == null) return t('factor.ago.now')
@@ -44,11 +42,6 @@ export default function FactorLibrary({ factorsData }) {
   useEffect(() => {
     load()
     const timer = setInterval(load, 15000)
-    fetch(apiPath('/api/strategies')).then((r) => r.json()).then((d) => {
-      const s = new Set()
-      for (const st of d.strategies || []) for (const f of st.factors || []) s.add(f.name)
-      setDeps(s)
-    }).catch(() => {})
     return () => clearInterval(timer)
   }, [load])
 
@@ -59,10 +52,9 @@ export default function FactorLibrary({ factorsData }) {
       if (srcFilter && r.source !== srcFilter) return false
       if (stateFilter === 'on' && !r.enabled) return false
       if (stateFilter === 'off' && r.enabled) return false
-      if (depsFilter === 'deps' && !deps.has(r.name)) return false
       return true
     })
-  }, [rows, search, srcFilter, stateFilter, depsFilter, deps])
+  }, [rows, search, srcFilter, stateFilter])
 
   const update = async (name, payload) => {
     try {
@@ -77,18 +69,21 @@ export default function FactorLibrary({ factorsData }) {
     }
   }
 
+  const sources = useMemo(
+    () => [...new Set(rows.map((r) => r.source).filter(Boolean))],
+    [rows],
+  )
+
   const columns = [
     { title: t('factor.col.factor'), key: 'label', width: 230,
       render: (_, r) => (
         <span><b>{lang === 'en' ? (r.label_en || r.label) : r.label}</b>{' '}
           <Typography.Text type="secondary" style={{ fontSize: 11 }}>{r.name}</Typography.Text>
-          {deps.has(r.name) && (
-            <Tag color="green" style={{ fontSize: 10, marginLeft: 4 }}>{t('factor.depsTag')}</Tag>
-          )}
+          <Tag color="green" style={{ fontSize: 10, marginLeft: 4 }}>{t('factor.depsTag')}</Tag>
         </span>
       ) },
-    { title: t('factor.col.source'), dataIndex: 'source', width: 96,
-      render: (v) => <Tag color={v === 'Clawby' ? 'purple' : 'gold'} style={{ fontSize: 11 }}>{v}</Tag> },
+    { title: t('factor.col.source'), dataIndex: 'source', width: 110,
+      render: (v) => <Tag color={String(v || '').includes('Clawby') ? 'purple' : 'gold'} style={{ fontSize: 11 }}>{v}</Tag> },
     { title: t('factor.col.value'), key: 'value', width: 170,
       render: (_, r) => (
         r.value == null
@@ -127,29 +122,23 @@ export default function FactorLibrary({ factorsData }) {
       children: (
         <>
           <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
-            {t('factor.hint')}
+            {t('factor.hintEssentials')}
           </Typography.Text>
           <Space style={{ marginBottom: 10 }} wrap>
             <Input.Search allowClear size="small" style={{ width: 240 }}
                           placeholder={t('factor.search')} value={search}
                           onChange={(e) => setSearch(e.target.value)} />
-            <Select size="small" allowClear style={{ width: 130 }}
+            <Select size="small" allowClear style={{ width: 140 }}
                     placeholder={t('factor.filter.allSource')}
                     value={srcFilter || undefined}
                     onChange={(v) => setSrcFilter(v || '')}
-                    options={[{ value: 'Binance官方', label: 'Binance' },
-                              { value: 'Clawby', label: 'Clawby' }]} />
+                    options={sources.map((s) => ({ value: s, label: s }))} />
             <Select size="small" allowClear style={{ width: 120 }}
                     placeholder={t('factor.filter.allStatus')}
                     value={stateFilter || undefined}
                     onChange={(v) => setStateFilter(v || '')}
                     options={[{ value: 'on', label: t('factor.filter.on') },
                               { value: 'off', label: t('factor.filter.off') }]} />
-            <Select size="small" allowClear style={{ width: 150 }}
-                    placeholder={t('factor.filter.allDeps')}
-                    value={depsFilter || undefined}
-                    onChange={(v) => setDepsFilter(v || '')}
-                    options={[{ value: 'deps', label: t('factor.filter.depsOnly') }]} />
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {t('factor.showing')} {filtered.length}/{rows.length}
             </Typography.Text>

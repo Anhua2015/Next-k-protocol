@@ -128,12 +128,13 @@ async def scan_loop():
             if n:
                 log.info("factors refreshed: %d", n)
 
-            # bookkeeping ~10s: equity snapshot + halt check
+            # bookkeeping ~10s: equity snapshot + halt check + macro quiet leverage
             if time.time() - last_book >= 10:
                 eq, bal, upnl = await executor.equity()
                 equity_cache = eq
                 db.record_equity(eq, bal, upnl)
                 risk.check_daily_halt(eq, cfg_global)
+                await risk.sync_event_quiet_leverage(cfg)
                 last_book = time.time()
 
             strategies = _strategies(cfg)
@@ -155,13 +156,17 @@ async def scan_loop():
                         db.log_signal(sig.strategy, sig.symbol, sig.side, sig.reason, False, why)
                         continue
                     sig.size_mult *= mult
+                    note = ""
+                    if mult < 1.0:
+                        fg = (db.get_factor("fear_greed") or {}).get("latest")
+                        note = f"恐贪×{mult:.2f}(FG={fg})"
                     price = factors.mark_price_of(sig.symbol)
                     qty = risk.position_qty(sig, scfg, equity_cache, cfg_global, price)
                     leverage = int((scfg.get("risk") or {}).get("leverage")
                                    or cfg_global.get("max_gross_leverage", 3))
                     pid = await executor.open_position(sig, qty, price, leverage)
                     db.log_signal(sig.strategy, sig.symbol, sig.side, sig.reason,
-                                  bool(pid), "" if pid else "执行失败/资金不足")
+                                  bool(pid), note if pid else (note or "执行失败/资金不足"))
             db.set_meta("last_tick_ts", int(time.time()))
             db.set_meta("last_error", "")
         except Exception as exc:  # noqa: BLE001

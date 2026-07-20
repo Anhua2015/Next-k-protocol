@@ -55,6 +55,7 @@ async def api_status():
         "daily_realized_pnl": day_pnl,
         "halted": risk.halted(),
         "event_quiet": risk.event_quiet(cfg["global"]),
+        "fear_greed": (db.get_factor("fear_greed") or {}).get("latest"),
         "open_positions": len(db.open_positions()),
         "universe": config.UNIVERSE,
         "last_tick_ts": int(db.get_meta("last_tick_ts", "0") or 0),
@@ -125,7 +126,9 @@ async def api_equity(limit: int = 2880, mode: str = "auto"):
 
 @app.get("/api/factors")
 async def api_factors():
-    return {"factors": db.all_factors_snapshot(), "now": int(time.time())}
+    rows = [r for r in db.all_factors_snapshot()
+            if r.get("factor") in factors.ESSENTIAL_FACTORS]
+    return {"factors": rows, "now": int(time.time())}
 
 
 @app.get("/api/factor-history")

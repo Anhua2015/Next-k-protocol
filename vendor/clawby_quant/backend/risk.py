@@ -4,11 +4,21 @@ Rules (from STRATEGIES.md): event quiet window, fear&greed sizing, per-coin
 cap, gross leverage cap, daily loss halt, max concurrent coins, no hedged
 same-coin positions.
 """
+import logging
 import time
 
 from . import db, factors
 
+log = logging.getLogger("risk")
+
 QUIET_EXEMPT = {"S09_EVENT_BREAKOUT"}
+
+# USD macro titles that should silence new entries (STRATEGIES.md: CPI/FOMC/NFP).
+_MACRO_KEYS = (
+    "cpi", "fomc", "nfp", "non-farm", "nonfarm", "non farm",
+    "非农", "利率", "interest rate", "fed ", "federal reserve",
+    "pce", "payroll", "employment", "jobless",
+)
 
 
 def _day_start():
@@ -34,28 +44,59 @@ def check_daily_halt(equity, cfg_global):
     return False
 
 
+def _is_high_importance(imp):
+    s = str(imp or "").strip().lower()
+    return any(x in s for x in ("3", "高", "high"))
+
+
+def _is_usd_macro(event):
+    """True for high-impact USD macro releases that should quiet the book."""
+    if not _is_high_importance(event.get("importance")):
+        return False
+    title = str(event.get("title") or "").lower()
+    country = str(event.get("country") or "").upper()
+    if any(k in title for k in _MACRO_KEYS):
+        return True
+    # FOMC fallback rows are tagged USD + High without always matching keys
+    if country in ("USD", "US", "USA") and "fomc" in title:
+        return True
+    return False
+
+
 def event_quiet(cfg_global):
-    """True while inside the pre-event quiet window of a high-importance event."""
+    """True while inside the pre-event quiet window of a high-importance USD macro."""
     cal = (db.get_factor("econ_cal") or {}).get("events", [])
     now = time.time()
-    window = cfg_global["event_quiet_minutes"] * 60
+    window = float(cfg_global.get("event_quiet_minutes") or 60) * 60
     for e in cal:
-        imp = str(e.get("importance", ""))
-        if any(x in imp for x in ("3", "高", "high", "High")) and 0 < e["ts"] - now <= window:
+        ts = e.get("ts")
+        if not ts:
+            continue
+        if not _is_usd_macro(e):
+            continue
+        if 0 < float(ts) - now <= window:
             return e.get("title", "event")
     return ""
 
 
 def size_multiplier(side, cfg_global):
+    """Fear & Greed extreme haircut for new entries (STRATEGIES.md)."""
     fg = db.get_factor("fear_greed") or {}
     v = fg.get("latest")
-    ext = cfg_global["fear_greed_extreme"]
+    ext = cfg_global.get("fear_greed_extreme") or {}
+    greed = float(ext.get("greed", 85))
+    fear = float(ext.get("fear", 15))
+    mult = float(ext.get("size_mult", 0.6))
     if v is None:
         return 1.0
-    if side == "long" and v >= ext["greed"]:
-        return ext["size_mult"]
-    if side == "short" and v <= ext["fear"]:
-        return ext["size_mult"]
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return 1.0
+    if side == "long" and v >= greed:
+        return mult
+    if side == "short" and v <= fear:
+        return mult
     return 1.0
 
 
@@ -114,3 +155,57 @@ def position_qty(sig, scfg, equity, cfg_global, price):
     notional = min(notional, equity * cfg_global["max_position_pct_per_coin"] / 100
                    * leverage)                              # global per-coin cap (×lev)
     return notional / price
+
+
+def _strategy_leverage(pos, cfg):
+    scfg = (cfg.get("strategies") or {}).get(pos["strategy"]) or {}
+    risk = scfg.get("risk") or {}
+    return int(risk.get("leverage") or (cfg.get("global") or {}).get("max_gross_leverage", 3))
+
+
+async def sync_event_quiet_leverage(cfg):
+    """During USD macro quiet: halve live leverage on open positions; restore after.
+
+    Paper mode only logs state transitions (no exchange leverage to change).
+    """
+    from . import executor
+
+    cfg_global = cfg.get("global") or {}
+    ev = event_quiet(cfg_global)
+    prev = db.get_meta("event_quiet_active", "") or ""
+
+    if ev and not prev:
+        db.set_meta("event_quiet_active", ev)
+        db.log("warn", f"事件静默开始 — 禁止开仓,存量仓杠杆减半: {ev[:60]}")
+        if executor.mode() == "live":
+            await _set_open_leverage(cfg, half=True)
+        return ev
+
+    if not ev and prev:
+        db.set_meta("event_quiet_active", "")
+        db.log("info", f"事件静默结束 — 恢复杠杆: {prev[:60]}")
+        if executor.mode() == "live":
+            await _set_open_leverage(cfg, half=False)
+        return ""
+
+    return ev or ""
+
+
+async def _set_open_leverage(cfg, half=True):
+    from . import executor, exchanges, binance
+
+    venue = executor.exchange()
+    for pos in db.open_positions():
+        if pos["strategy"] in QUIET_EXEMPT:
+            continue
+        lev = _strategy_leverage(pos, cfg)
+        target = max(1, lev // 2) if half else lev
+        sym = pos["symbol"]
+        try:
+            if venue == "binance":
+                await binance.set_leverage(sym, target)
+            else:
+                await exchanges.set_leverage(venue, sym, target)
+            log.info("quiet leverage %s %s -> %dx", sym, "half" if half else "restore", target)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("quiet leverage %s failed: %s", sym, exc)

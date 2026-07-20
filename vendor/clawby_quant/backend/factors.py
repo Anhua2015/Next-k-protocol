@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 
-from . import binance, bitget_market, clawby, config, db, okx_market
+from . import binance, bitget_market, clawby, config, db, okx_market, public_macros
 
 log = logging.getLogger("factors")
 
@@ -191,38 +191,21 @@ async def f_etf_flow_btc(_):
 
 
 async def f_fear_greed(_):
-    data = await clawby.relay_safe("index_fear_greed_history")
-    if not data:
+    """Crypto Fear & Greed — alternative.me public API (no Clawby)."""
+    try:
+        return await public_macros.fear_greed(30)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("fear_greed: %s", exc)
         return None
-    # shape: {"data_list": [values...], "time_list": [...]} (ascending)
-    if isinstance(data, dict) and isinstance(data.get("data_list"), list) and data["data_list"]:
-        try:
-            return {"latest": float(data["data_list"][-1]),
-                    "series": [float(x) for x in data["data_list"][-30:]]}
-        except (TypeError, ValueError):
-            return None
-    return None
 
 
 async def f_econ_cal(_):
-    now_ms = int(time.time() * 1000)
-    data = await clawby.relay_safe("calendar_economic_data",
-                                   {"start_time": now_ms - 86400_000,
-                                    "end_time": now_ms + 3 * 86400_000, "language": "zh-CN"})
-    if data is None:
+    """High-impact macro calendar — Forex Factory weekly JSON (no Clawby)."""
+    try:
+        return await public_macros.econ_calendar()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("econ_cal: %s", exc)
         return None
-    rows = data if isinstance(data, list) else []
-    events = []
-    for r in rows:
-        # upstream fields: publish_timestamp (ms) / calendar_name / importance_level
-        ts = (r.get("publish_timestamp") or r.get("time")
-              or r.get("timestamp") or r.get("date"))
-        title = str(r.get("calendar_name") or r.get("title") or r.get("name") or "")
-        imp = str(r.get("importance_level") or r.get("importance") or r.get("star") or "")
-        if ts:
-            events.append({"ts": int(float(ts) / (1000 if float(ts) > 4e10 else 1)),
-                           "title": title[:80], "importance": imp})
-    return {"events": events[:50]}
 
 
 async def f_exch_chain_tx(_):
@@ -569,8 +552,8 @@ REGISTRY = [
     ("netflow_xsec",  900,   False, f_netflow_xsec,  "资金净流排行",      "Clawby", "Netflow leaderboard"),
     ("liq_map",       3600,  True,  f_liq_map,       "爆仓地图",          "Clawby", "Liquidation map"),
     ("etf_flow_btc",  3600,  False, f_etf_flow_btc,  "BTC ETF净流",       "Clawby", "BTC ETF net flow"),
-    ("fear_greed",    3600,  False, f_fear_greed,    "恐惧贪婪指数",      "Clawby", "Fear & Greed index"),
-    ("econ_cal",      3600,  False, f_econ_cal,      "经济日历",          "Clawby", "Economic calendar"),
+    ("fear_greed",    3600,  False, f_fear_greed,    "恐惧贪婪指数",      "内置", "Fear & Greed (alternative.me)"),
+    ("econ_cal",      3600,  False, f_econ_cal,      "经济日历",          "内置", "Econ calendar (Forex Factory)"),
     ("unlock",        3600,  False, f_unlock,        "代币解锁日程",      "Clawby", "Token unlock schedule"),
     ("alt_season",    3600,  False, f_alt_season,    "山寨季指数",        "Clawby", "Altcoin season index"),
     # -- 2026-07-18 full-sweep expansion --------------------------------------
@@ -618,8 +601,8 @@ def get_interval(name, default):
         return default
 
 
-# Factors required by the four live strategies (S02/S06/S11/S14) + mark pricing.
-# Everything else defaults OFF to avoid Clawby / unused Binance poll pressure.
+# Factors kept for live quant: four strategies + mark + risk macros.
+# Everything else defaults OFF to avoid Clawby / unused poll pressure.
 ESSENTIAL_FACTORS = frozenset({
     "mark_all",      # position mark / basis
     "taker_flow",    # S14
@@ -627,6 +610,8 @@ ESSENTIAL_FACTORS = frozenset({
     "liq_orders",    # S02
     "ob_wall",       # S06
     "cvd",           # S06
+    "fear_greed",    # risk size haircut
+    "econ_cal",      # pre-event quiet window
 })
 
 
@@ -636,18 +621,15 @@ def is_enabled(name):
 
 
 def apply_essential_defaults(force=False):
-    """Turn off non-essential factors once (or when force=True).
-
-    Existing DBs may have toggled everything on; this migration keeps only the
-    strategy-dependent set collecting.
-    """
-    flag = "factor_essentials_v1"
+    """Enable only ESSENTIAL_FACTORS (migration bumps when the set grows)."""
+    flag = "factor_essentials_v2"
     if not force and db.get_meta(flag, "") == "1":
         return False
     names = {r[0] for r in REGISTRY}
     for name in names:
         db.set_meta(f"factor_enabled:{name}", "1" if name in ESSENTIAL_FACTORS else "0")
     db.set_meta(flag, "1")
+    db.set_meta("factor_essentials_v1", "1")  # mark older migration consumed
     log.info("factor collection limited to essentials: %s",
              ", ".join(sorted(ESSENTIAL_FACTORS)))
     return True
@@ -687,10 +669,15 @@ def _value_summary(name, per_symbol):
     return str(v)[:24], ref_sym
 
 
-def config_snapshot():
-    """Full factor-library view for the management panel."""
+def config_snapshot(essentials_only=True):
+    """Factor-library view for the management panel.
+
+    By default only returns ESSENTIAL_FACTORS (strategy-dependent + mark_all).
+    """
     out = []
     for name, default, per_symbol, _f, label, source, label_en in REGISTRY:
+        if essentials_only and name not in ESSENTIAL_FACTORS:
+            continue
         symbols = config.UNIVERSE if per_symbol else [""]
         ages = []
         for sym in symbols:
@@ -708,6 +695,7 @@ def config_snapshot():
             "symbols_collected": len(ages), "symbols_total": len(symbols),
             "value": value, "value_symbol": value_symbol,
             "label_en": label_en,
+            "essential": name in ESSENTIAL_FACTORS,
         })
     return out
 
@@ -825,5 +813,6 @@ def snapshot_for(symbol):
         "basis_pct": round(basis_pct_of(symbol), 6),
         "coinbase_prem": g("coinbase_prem", "", "latest"),
         "fear_greed": g("fear_greed", "", "latest"),
+        "event_quiet": db.get_meta("event_quiet_active", "") or "",
         "mark_price": mark_price_of(symbol),
     }
