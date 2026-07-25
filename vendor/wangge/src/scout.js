@@ -4,12 +4,24 @@ import { suggestFromTrend, RISK } from './autopilot.js';
 import { normalizeSymbol } from './config.js';
 import { pushAutoLog } from './autolog.js';
 
+/** Liquid majors — default auto-eligible at scoreIn. */
+export const SCOUT_CORE = Object.freeze([
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT',
+]);
+
+/**
+ * Second-tier large caps — eligible only with higher score + clear range/weak trend.
+ * Empty by default (only BTC/ETH/SOL). Override via SCOUT_ALLOWLIST_SECONDARY.
+ */
+export const SCOUT_SECONDARY = Object.freeze([]);
+
 const DEFAULTS = {
   enabled: true,
-  maxBots: 5,
+  maxBots: 3,
   intervalMs: 2 * 60 * 60_000, // 2h — slow cadence, less churn
-  poolSize: 30,          // volume-ranked screen before ATR scoring
-  scoreIn: 0.68,         // only strong candidates may open
+  poolSize: 30,          // volume-ranked screen before ATR scoring (within allowlist)
+  scoreIn: 0.68,         // core entry floor
+  scoreInSecondary: 0.76, // secondary needs clearer grid setup
   scoreOut: 0.22,        // eviction only when clearly broken
   strikesToEvict: 4,     // ~4× interval of weakness before remove
   atrMin: 0.45,
@@ -18,6 +30,13 @@ const DEFAULTS = {
   minHoldMs: 6 * 60 * 60_000, // do not evict/replace a bot younger than 6h
   confirmEntries: 2,     // need N consecutive high scores before opening
 };
+
+function parseSymList(raw, fallback) {
+  if (raw == null || String(raw).trim() === '') return [...fallback];
+  return String(raw).split(/[,;\s]+/)
+    .map((s) => normalizeSymbol(s))
+    .filter(Boolean);
+}
 
 export function createScout(ctx) {
   const {
@@ -30,6 +49,8 @@ export function createScout(ctx) {
 
   const state = {
     ...DEFAULTS,
+    core: new Set(SCOUT_CORE),
+    secondary: new Set(SCOUT_SECONDARY),
     pool: [],
     lastRunAt: 0,
     lastError: null,
@@ -41,15 +62,42 @@ export function createScout(ctx) {
     timer: null,
   };
 
+  function tierOf(sym) {
+    if (state.core.has(sym)) return 'core';
+    if (state.secondary.has(sym)) return 'secondary';
+    return null;
+  }
+
+  function isAllowlisted(sym) {
+    return tierOf(sym) != null;
+  }
+
+  /** Secondary only enters on range / weak trend; core uses scoreIn alone. */
+  function passesEntryGate(row) {
+    const tier = row.tier || tierOf(row.symbol);
+    if (!tier) return false;
+    if (tier === 'core') return row.score >= state.scoreIn;
+    if (row.score < state.scoreInSecondary) return false;
+    const strength = Number(row.strength) || 0;
+    return row.trend === 'range' || strength < 0.45;
+  }
+
   function configure(partial = {}) {
     if (partial.enabled != null) state.enabled = !!partial.enabled;
     if (partial.maxBots != null) state.maxBots = Math.min(5, Math.max(1, Number(partial.maxBots) || 5));
     if (partial.intervalMs != null) state.intervalMs = Math.max(30 * 60_000, Number(partial.intervalMs) || DEFAULTS.intervalMs);
     if (partial.scoreIn != null) state.scoreIn = Number(partial.scoreIn);
+    if (partial.scoreInSecondary != null) state.scoreInSecondary = Number(partial.scoreInSecondary);
     if (partial.scoreOut != null) state.scoreOut = Number(partial.scoreOut);
     if (partial.minHoldMs != null) state.minHoldMs = Math.max(60_000, Number(partial.minHoldMs) || DEFAULTS.minHoldMs);
     if (partial.confirmEntries != null) state.confirmEntries = Math.max(1, Number(partial.confirmEntries) || DEFAULTS.confirmEntries);
     if (partial.replaceGap != null) state.replaceGap = Number(partial.replaceGap);
+    if (partial.core != null) {
+      state.core = new Set(Array.isArray(partial.core) ? partial.core.map(normalizeSymbol) : parseSymList(partial.core, SCOUT_CORE));
+    }
+    if (partial.secondary != null) {
+      state.secondary = new Set(Array.isArray(partial.secondary) ? partial.secondary.map(normalizeSymbol) : parseSymList(partial.secondary, SCOUT_SECONDARY));
+    }
   }
 
   function pushAction(a) {
@@ -98,6 +146,7 @@ export function createScout(ctx) {
   function hardFilter(m, volInfo) {
     const name = normalizeSymbol(m.name || m.displayName || '');
     if (!name || !name.endsWith('USDT')) return false;
+    if (!isAllowlisted(name)) return false;
     // Skip leveraged token style names
     if (/^(1000|10000)/.test(name)) return false;
     if ((m.maxLeverage || 50) < 3) return false;
@@ -109,7 +158,7 @@ export function createScout(ctx) {
     return true;
   }
 
-  function scoreAnalysis(analysis, volRank, poolN) {
+  function scoreAnalysis(analysis, volRank, poolN, tier) {
     if (!analysis) return { score: 0, why: '无K线' };
     const atr = Number(analysis.atrPct);
     if (!(atr > 0)) return { score: 0, why: '无ATR' };
@@ -130,19 +179,19 @@ export function createScout(ctx) {
       why.push(`ATR过高${atr.toFixed(2)}%`);
     }
 
-    // Regime: range best; mild trend ok; strong one-way nearly disqualified
+    // Regime: pure range best (backtest: neutral >> directional in range AND mild trends).
     const strength = Number(analysis.strength) || 0;
     if (analysis.trend === 'range') {
-      score += 0.40;
-      why.push('震荡优');
+      score += 0.45;
+      why.push('震荡适合中性');
     } else if (strength < 0.45) {
-      score += 0.26;
-      why.push(`弱${analysis.trend}`);
-    } else if (strength < 0.65) {
-      score += 0.12;
-      why.push(`中等${analysis.trend}`);
+      score += 0.18;
+      why.push(`弱${analysis.trend}·宜中性`);
+    } else if (strength < 0.70) {
+      score += 0.08;
+      why.push(`中等${analysis.trend}·慎单边`);
     } else {
-      score += 0.02;
+      score -= 0.05;
       why.push(`强趋势回避`);
     }
 
@@ -151,6 +200,13 @@ export function createScout(ctx) {
     const volWeight = volRank < Math.max(8, Math.floor(poolN * 0.35)) ? 0.22 : 0.08;
     score += volWeight * volScore;
     why.push(`量排名${volRank + 1}/${poolN}`);
+
+    if (tier === 'core') {
+      score += 0.05;
+      why.push('核心白名单');
+    } else if (tier === 'secondary') {
+      why.push('次核心·门槛更高');
+    }
 
     return { score: Math.max(0, Math.min(1, Number(score.toFixed(3)))), why: why.join(' · ') };
   }
@@ -185,14 +241,16 @@ export function createScout(ctx) {
     const scored = [];
     for (let i = 0; i < top.length; i++) {
       const c = top[i];
+      const tier = tierOf(c.symbol);
       let analysis = null;
       try {
         const candles = await exchange.getCandles(c.marketId, 3600, 120);
         analysis = analyzeTrend(candles || []);
       } catch { /* */ }
-      const { score, why } = scoreAnalysis(analysis, i, top.length);
+      const { score, why } = scoreAnalysis(analysis, i, top.length, tier);
       scored.push({
         ...c,
+        tier,
         score,
         why,
         trend: analysis?.trend || null,
@@ -210,7 +268,7 @@ export function createScout(ctx) {
   }
 
   function sizeBaseFor(market, price, leverage, equity, slots) {
-    const r = RISK.steady;
+    const r = RISK.aggressive;
     const bal = Number(equity) > 0 ? Number(equity) : 15000;
     const n = Math.max(1, slots);
     const budgetNotional = (bal * (r.budget || 0.7) * leverage) / n;
@@ -244,8 +302,14 @@ export function createScout(ctx) {
       trend: row.trend, recommended: row.recommended || 'neutral',
       strength: row.strength || 0, atrPct: row.atrPct, price: row.price || market.lastPrice,
     };
-    const mode = analysis.recommended || 'neutral';
-    const sug = suggestFromTrend(analysis, { mode, riskProfile: 'steady' });
+    // Backtest: forced neutral beat long/short across range/up/down synthetics.
+    // Only use directional when signal is very strong (≥0.75).
+    const strength = Number(analysis.strength) || 0;
+    let mode = 'neutral';
+    if ((analysis.recommended === 'long' || analysis.recommended === 'short') && strength >= 0.75) {
+      mode = analysis.recommended;
+    }
+    const sug = suggestFromTrend(analysis, { mode, riskProfile: 'aggressive' });
     if (!sug) throw new Error('无法生成网格参数 ' + sym);
     const equity = await accountEquity();
     const lev = Math.min(sug.leverage || 3, market.maxLeverage || 50);
@@ -261,7 +325,7 @@ export function createScout(ctx) {
         sizeBase,
         leverage: lev,
         outOfRangeAction: 'recover',
-        autopilot: { enabled: true, riskProfile: 'steady', allowFlip: true },
+        autopilot: { enabled: true, riskProfile: 'aggressive', allowFlip: true },
       });
     } catch (e) {
       try { await fleet.remove(sym); } catch { /* */ }
@@ -339,12 +403,12 @@ export function createScout(ctx) {
       const bySym = new Map(pool.map((p) => [p.symbol, p]));
       const held = fleet.list();
 
-      const inPoolTop = new Set(pool.filter((p) => p.score >= state.scoreIn).map((p) => p.symbol));
+      const inPoolTop = new Set(pool.filter((p) => passesEntryGate(p)).map((p) => p.symbol));
       for (const sym of Object.keys(state.entryStreak)) {
         if (!inPoolTop.has(sym)) delete state.entryStreak[sym];
       }
       for (const row of pool) {
-        if (row.score >= state.scoreIn) {
+        if (passesEntryGate(row)) {
           state.entryStreak[row.symbol] = (state.entryStreak[row.symbol] || 0) + 1;
         }
       }
@@ -352,7 +416,8 @@ export function createScout(ctx) {
       for (const sym of [...held]) {
         const row = bySym.get(sym);
         const score = row?.score ?? 0;
-        if (!row || score < state.scoreOut) {
+        // Off-allowlist leftovers accumulate strikes so they get cleaned out.
+        if (!row || !isAllowlisted(sym) || score < state.scoreOut) {
           state.strikes[sym] = (state.strikes[sym] || 0) + 1;
         } else {
           state.strikes[sym] = 0;
@@ -382,7 +447,7 @@ export function createScout(ctx) {
           weakest && bestOut
           && heldLongEnough(weakest.symbol)
           && bestOut.score - weakest.score >= state.replaceGap
-          && bestOut.score >= state.scoreIn
+          && passesEntryGate(bestOut)
           && (state.entryStreak[bestOut.symbol] || 0) >= state.confirmEntries
         ) {
           const closed = await closeBot(weakest.symbol, { remove: true });
@@ -401,7 +466,7 @@ export function createScout(ctx) {
       const needConfirm = bootstrap ? 1 : state.confirmEntries;
       for (const row of pool) {
         if (slots <= 0) break;
-        if (row.score < state.scoreIn) break;
+        if (!passesEntryGate(row)) continue;
         if ((state.entryStreak[row.symbol] || 0) < needConfirm) continue;
         if (fleet.get(row.symbol)?.running) continue;
         try {
@@ -464,7 +529,10 @@ export function createScout(ctx) {
       minHoldMs: state.minHoldMs,
       confirmEntries: state.confirmEntries,
       scoreIn: state.scoreIn,
+      scoreInSecondary: state.scoreInSecondary,
       scoreOut: state.scoreOut,
+      core: [...state.core],
+      secondary: [...state.secondary],
       actions: state.lastActions.slice(0, 12),
       running: fleet.list().filter((s) => fleet.get(s)?.running),
       symbols: fleet.list(),
@@ -475,9 +543,14 @@ export function createScout(ctx) {
   function start() {
     configure({
       enabled: process.env.SCOUT_ENABLED !== '0' && process.env.SCOUT_ENABLED !== 'false',
-      maxBots: Number(process.env.SCOUT_MAX_BOTS || 5),
+      maxBots: Number(process.env.SCOUT_MAX_BOTS || DEFAULTS.maxBots),
       intervalMs: Number(process.env.SCOUT_INTERVAL_MS || DEFAULTS.intervalMs),
       minHoldMs: Number(process.env.SCOUT_MIN_HOLD_MS || DEFAULTS.minHoldMs),
+      scoreInSecondary: process.env.SCOUT_SCORE_IN_SECONDARY != null
+        ? Number(process.env.SCOUT_SCORE_IN_SECONDARY)
+        : DEFAULTS.scoreInSecondary,
+      core: parseSymList(process.env.SCOUT_ALLOWLIST, SCOUT_CORE),
+      secondary: parseSymList(process.env.SCOUT_ALLOWLIST_SECONDARY, SCOUT_SECONDARY),
     });
     stop();
     if (!state.enabled) {
@@ -488,11 +561,11 @@ export function createScout(ctx) {
     setTimeout(() => { tick().catch(() => {}); }, 20_000).unref?.();
     state.timer = setInterval(() => { tick().catch(() => {}); }, state.intervalMs);
     state.timer.unref?.();
-    log(`[选币] 已启动：最多 ${state.maxBots} 个机器人，约每 ${Math.round(state.intervalMs / 60000)} 分钟巡检候选池`);
+    log(`[选币] 已启动：最多 ${state.maxBots} 个机器人，白名单核心 ${state.core.size} + 次核心 ${state.secondary.size}，约每 ${Math.round(state.intervalMs / 60000)} 分钟巡检`);
     pushAutoLog({
       source: '选币官',
       type: 'boot',
-      message: `选币官已启动 · 最多 ${state.maxBots} 个 · 每 ${Math.round(state.intervalMs / 60000)} 分钟巡检 · 入场需确认 · 最短持有 ${Math.round(state.minHoldMs / 3600000)}h`,
+      message: `选币官已启动 · 最多 ${state.maxBots} 个 · 白名单 ${state.core.size}+${state.secondary.size} · 每 ${Math.round(state.intervalMs / 60000)} 分钟巡检 · 入场需确认 · 最短持有 ${Math.round(state.minHoldMs / 3600000)}h`,
     });
   }
 

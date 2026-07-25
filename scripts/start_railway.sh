@@ -13,6 +13,8 @@ WANGGE_PID=""
 
 export WANGGE_INTERNAL_URL="${WANGGE_INTERNAL_URL:-http://127.0.0.1:${WANGGE_PORT}}"
 export WANGGE_ENABLED="${WANGGE_ENABLED:-1}"
+# clawby-quant sidecar — on by default
+export NEXT_K_CLAWBY_EMBED="${NEXT_K_CLAWBY_EMBED:-1}"
 
 cleanup() {
   if [[ -n "${WANGGE_PID}" ]] && kill -0 "${WANGGE_PID}" 2>/dev/null; then

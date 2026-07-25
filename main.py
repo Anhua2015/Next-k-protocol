@@ -97,15 +97,35 @@ async def lifespan(app: FastAPI):
 
     reconcile_task = asyncio.create_task(_reconcile_loop())
 
+    try:
+        from utils.clawby_quant_runtime import embed_enabled, start_sidecar
+
+        if embed_enabled():
+            out = start_sidecar()
+            logger.info("clawby-quant sidecar: %s", out)
+    except Exception as e:
+        logger.warning("clawby-quant sidecar startup skipped: %s", e)
+
     yield
     reconcile_task.cancel()
+
+    try:
+        from utils.clawby_quant_runtime import stop_sidecar
+
+        stop_sidecar()
+    except Exception as e:
+        logger.warning("clawby-quant sidecar shutdown skipped: %s", e)
+
     logger.info("Next K Protocol shutting down")
 
 
 app = FastAPI(
     title="Next K Protocol",
-    description="币安合约实盘交易 API 服务。接收交易请求并执行开仓，当前持仓直接读取币安实时数据。",
-    version="1.0.0",
+    description=(
+        "币安合约实盘交易 API 服务。接收交易请求并执行开仓，"
+        "当前持仓直接读取币安实时数据；可选嵌入 clawby-quant。"
+    ),
+    version="1.1.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -132,7 +152,12 @@ app.include_router(router)
 from routers.metrics import router as metrics_router
 app.include_router(metrics_router)
 
-logger.info("Routes: /api/binance/* | Wangge UI+API proxied on /")
+from routers.clawby_quant import router as clawby_quant_router
+app.include_router(clawby_quant_router)
+
+logger.info(
+    "Routes: /api/binance/* | /api/clawby-quant/* | /clawby-ui/ | Next K grid UI+API proxied on /"
+)
 logger.info("Swagger: http://0.0.0.0:%d/docs", PORT)
 logger.info("Binance health: http://0.0.0.0:%d/api/binance/health", PORT)
 

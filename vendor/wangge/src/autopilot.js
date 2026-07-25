@@ -9,9 +9,9 @@ export const RISK = {
 export function defaultAutopilot(partial = {}) {
   return {
     enabled: partial.enabled !== false, // default ON — hands-off after start
-    riskProfile: partial.riskProfile === 'aggressive' ? 'aggressive' : 'steady',
+    riskProfile: partial.riskProfile === 'steady' ? 'steady' : 'aggressive',
     intervalMs: Math.max(60_000, Number(partial.intervalMs) || 10 * 60_000),
-    minStrength: clamp(Number(partial.minStrength ?? 0.45), 0.15, 0.9),
+    minStrength: clamp(Number(partial.minStrength ?? 0.55), 0.15, 0.9),
     coolDownMs: Math.max(60_000, Number(partial.coolDownMs) || 30 * 60_000),
     // Paper and live share the same policy: allow reverse flip on strong signals
     allowFlip: partial.allowFlip != null ? !!partial.allowFlip : true,
@@ -25,8 +25,8 @@ export function defaultAutopilot(partial = {}) {
 /**
  * Suggest grid bounds (+ optional gridCount/leverage) from analyzeTrend result.
  */
-export function suggestFromTrend(analysis, { mode, riskProfile = 'steady', gridCount, leverage } = {}) {
-  const r = RISK[riskProfile] || RISK.steady;
+export function suggestFromTrend(analysis, { mode, riskProfile = 'aggressive', gridCount, leverage } = {}) {
+  const r = RISK[riskProfile] || RISK.aggressive;
   const p = Number(analysis?.price);
   if (!(p > 0)) return null;
   const atrPct = Number(analysis?.atrPct) > 0 ? Number(analysis.atrPct) : 0.8;
@@ -108,21 +108,39 @@ export function decideAutopilot({ analysis, config, lastPrice, autopilot, now = 
     };
   }
 
-  // 2) Mild conflict on neutral→trend: prefer flip into trend if allowed
-  if (mildConflict && mode === 'neutral' && ap.allowFlip && (rec === 'long' || rec === 'short')) {
-    const sug = suggestFromTrend(analysis, { mode: rec, riskProfile: ap.riskProfile, gridCount: config.gridCount });
-    if (sug) {
-      return {
-        action: 'flip',
-        reason: `震荡转趋势（→${rec}，强度${pct(strength)}），自动切向`,
-        params: {
-          ...sug,
-          sizeBase: config.sizeBase,
-          leverage: config.leverage || sug.leverage,
-          outOfRangeAction: config.outOfRangeAction || 'recover',
-          marketId: config.marketId,
-        },
-      };
+  // 2) Mild conflict: enter or leave a directional grid when signal is strong enough
+  if (mildConflict && ap.allowFlip) {
+    if (mode === 'neutral' && (rec === 'long' || rec === 'short')) {
+      const sug = suggestFromTrend(analysis, { mode: rec, riskProfile: ap.riskProfile, gridCount: config.gridCount });
+      if (sug) {
+        return {
+          action: 'flip',
+          reason: `震荡转趋势（→${rec}，强度${pct(strength)}），自动切向`,
+          params: {
+            ...sug,
+            sizeBase: config.sizeBase,
+            leverage: config.leverage || sug.leverage,
+            outOfRangeAction: config.outOfRangeAction || 'recover',
+            marketId: config.marketId,
+          },
+        };
+      }
+    }
+    if ((mode === 'long' || mode === 'short') && rec === 'neutral') {
+      const sug = suggestFromTrend(analysis, { mode: 'neutral', riskProfile: ap.riskProfile, gridCount: config.gridCount });
+      if (sug) {
+        return {
+          action: 'flip',
+          reason: `趋势转震荡（${mode}→中性，强度${pct(strength)}），自动切回中性网格`,
+          params: {
+            ...sug,
+            sizeBase: config.sizeBase,
+            leverage: config.leverage || sug.leverage,
+            outOfRangeAction: config.outOfRangeAction || 'recover',
+            marketId: config.marketId,
+          },
+        };
+      }
     }
   }
 
