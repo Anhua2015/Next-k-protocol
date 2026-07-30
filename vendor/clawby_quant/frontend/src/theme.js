@@ -1,14 +1,14 @@
-/** Shared Next K palette for charts / inline styles */
+/** Shared Next K palette — aligned with next-k-frontend Hyperstats dark */
 export const nk = {
-  bg: '#F2F4F7',
-  surface: '#FFFFFF',
-  surfaceLight: '#EBEEF2',
-  border: '#D5DBE3',
-  accent: '#C45C5B',
-  gold: '#A67C3D',
-  green: '#2F8A52',
-  red: '#C24B45',
-  blue: '#3E6B82',
-  text: '#1B1D22',
-  muted: '#858C97',
+  bg: '#0C0E12',
+  surface: '#12151A',
+  surfaceLight: '#181C22',
+  border: '#232830',
+  accent: '#2EC4B6',
+  gold: '#E8B84A',
+  green: '#3DDC97',
+  red: '#F07178',
+  blue: '#5B9FD4',
+  text: '#F0F2F5',
+  muted: '#6B7380',
 }

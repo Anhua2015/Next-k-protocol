@@ -49,7 +49,7 @@ export default function App() {
         collapsible
         collapsed={collapsed}
         onCollapse={setCollapsed}
-        theme="light"
+        theme="dark"
         width={200}
         style={{ background: nk.surface, borderRight: `1px solid ${nk.border}` }}
       >
@@ -60,7 +60,7 @@ export default function App() {
             gap: 8, fontWeight: 700, fontSize: 15, paddingLeft: 4, color: nk.text,
           }}
         >
-          <ThunderboltOutlined style={{ fontSize: 18, color: nk.gold }} />
+          <ThunderboltOutlined style={{ fontSize: 18, color: nk.accent }} />
           {!collapsed && (
             <span>
               Next <span className="accent">K</span>
@@ -71,7 +71,7 @@ export default function App() {
           )}
         </div>
         <Menu
-          theme="light"
+          theme="dark"
           mode="inline"
           selectedKeys={[page]}
           style={{ background: 'transparent', borderInlineEnd: 0 }}
@@ -84,14 +84,14 @@ export default function App() {
         <Header
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            background: 'rgba(255,255,255,0.88)', backdropFilter: 'blur(12px)',
+            background: 'rgba(12, 14, 18, 0.92)', backdropFilter: 'blur(12px)',
             borderBottom: `1px solid ${nk.border}`, paddingInline: 20,
           }}
         >
           <Space size="middle" wrap>
             <Typography.Title
               level={4}
-              style={{ margin: 0, fontFamily: '"Noto Serif SC", Georgia, serif', fontSize: 18 }}
+              style={{ margin: 0, fontFamily: '"Source Sans 3", system-ui, sans-serif', fontSize: 18 }}
             >
               {t(PAGES[page].key)}
             </Typography.Title>

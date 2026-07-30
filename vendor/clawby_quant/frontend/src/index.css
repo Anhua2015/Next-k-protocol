@@ -1,19 +1,19 @@
-/* Next K daylight theme for clawby-quant embed */
+/* Next K Hyperstats dark — aligned with next-k-frontend/theme.css */
 :root {
-  color-scheme: light;
-  --nk-bg: #F2F4F7;
-  --nk-surface: #FFFFFF;
-  --nk-surface-light: #EBEEF2;
-  --nk-border: #D5DBE3;
-  --nk-accent: #C45C5B;
-  --nk-gold: #A67C3D;
-  --nk-green: #2F8A52;
-  --nk-red: #C24B45;
-  --nk-blue: #3E6B82;
-  --nk-text: #1B1D22;
-  --nk-text-secondary: #555B66;
-  --nk-text-muted: #858C97;
-  --nk-radius: 0.1875rem;
+  color-scheme: dark;
+  --nk-bg: #0C0E12;
+  --nk-surface: #12151A;
+  --nk-surface-light: #181C22;
+  --nk-border: #232830;
+  --nk-accent: #2EC4B6;
+  --nk-gold: #E8B84A;
+  --nk-green: #3DDC97;
+  --nk-red: #F07178;
+  --nk-blue: #5B9FD4;
+  --nk-text: #F0F2F5;
+  --nk-text-secondary: #9AA3AF;
+  --nk-text-muted: #6B7380;
+  --nk-radius: 0.5rem;
 }
 
 html, body, #root {
@@ -27,14 +27,12 @@ body {
   -webkit-font-smoothing: antialiased;
   background-color: var(--nk-bg);
   background-image:
-    radial-gradient(ellipse 90% 55% at 8% -5%, color-mix(in srgb, var(--nk-gold) 10%, transparent), transparent 52%),
-    radial-gradient(ellipse 70% 45% at 92% 8%, color-mix(in srgb, var(--nk-accent) 7%, transparent), transparent 48%),
-    linear-gradient(180deg, #FAFBFC 0%, var(--nk-bg) 42%);
+    radial-gradient(ellipse 90% 42% at 50% -8%, color-mix(in srgb, var(--nk-accent) 6%, transparent), transparent 58%);
 }
 
 .nk-brand {
-  font-family: "Noto Serif SC", Georgia, serif;
-  letter-spacing: 0.02em;
+  font-family: "Source Sans 3", system-ui, sans-serif;
+  letter-spacing: 0.01em;
 }
 
 .nk-brand .accent {
@@ -58,7 +56,8 @@ body {
 .ant-card {
   border-radius: var(--nk-radius) !important;
   border-color: var(--nk-border) !important;
-  box-shadow: 0 1px 2px rgba(27, 29, 34, 0.06), 0 8px 24px -14px rgba(27, 29, 34, 0.1);
+  box-shadow: none;
+  background: color-mix(in srgb, var(--nk-surface) 94%, var(--nk-bg)) !important;
 }
 
 .ant-table-wrapper .ant-table {
