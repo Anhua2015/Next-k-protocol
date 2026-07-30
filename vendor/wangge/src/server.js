@@ -8,12 +8,13 @@ import { createExchange } from './exchange/bg/index.js';
 import { createFleet, snapKey } from './fleet.js';
 import { analyzeTrend } from './trend.js';
 import { setupProxies, checkProxy } from './proxy.js';
-import { loadSnapshot, saveSnapshot, deleteSnapshot, loadState } from './persist.js';
+import { loadSnapshot, saveSnapshot, deleteSnapshot, loadState, savePersistedSymbols, getDataDir } from './persist.js';
 import { createAiService } from './ai/service.js';
 import { createScout } from './scout.js';
 import { getAutoLog, pushAutoLog } from './autolog.js';
 
 const cfg = getConfig();
+console.log(`[持久化] 状态目录 ${getDataDir()}（设 DATA_DIR=/data 并挂 Volume，部署才不会丢网格）`);
 
 {
   const missing = [];
@@ -193,19 +194,24 @@ function buildOverview() {
 }
 
 function persistSymbolsEnv() {
-  const list = fleet.list().join(',');
-  const envFile = path.join(ROOT, '.env');
-  let content = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
-  let wrote = false;
-  for (const key of ['BG_SYMBOLS', 'BITGET_SYMBOLS']) {
-    const regex = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
-    if (regex.test(content)) {
-      content = content.replace(regex, `${key}=${list}`);
-      wrote = true;
+  const symbols = fleet.list();
+  const list = symbols.join(',');
+  // Durable path (volume). Local .env is best-effort only — containers wipe it on deploy.
+  try { savePersistedSymbols(symbols); } catch {}
+  try {
+    const envFile = path.join(ROOT, '.env');
+    let content = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
+    let wrote = false;
+    for (const key of ['BG_SYMBOLS', 'BITGET_SYMBOLS']) {
+      const regex = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
+      if (regex.test(content)) {
+        content = content.replace(regex, `${key}=${list}`);
+        wrote = true;
+      }
     }
-  }
-  if (!wrote) content = content.trimEnd() + `\nBG_SYMBOLS=${list}\n`;
-  fs.writeFileSync(envFile, content, 'utf8');
+    if (!wrote) content = content.trimEnd() + `\nBG_SYMBOLS=${list}\n`;
+    fs.writeFileSync(envFile, content, 'utf8');
+  } catch { /* ephemeral .env may be read-only */ }
   process.env.BG_SYMBOLS = list;
 }
 
