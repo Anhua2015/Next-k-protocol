@@ -1,5 +1,6 @@
 // PaperExchange: simulated trading on Bitget USDT-M public prices.
 import { EventEmitter } from 'node:events';
+import { loadPaperBook, savePaperBook } from '../../persist.js';
 
 const PRODUCT = 'USDT-FUTURES';
 const FALLBACK_MARKETS = [
@@ -13,6 +14,7 @@ export class PaperExchange extends EventEmitter {
     super();
     this.mode = 'paper';
     this.balance = opts.startBalance ?? 15000;
+    this._startBalance = this.balance;
     this.productType = opts.productType || PRODUCT;
     this.candidates = [...new Set((opts.apiUrl ? [opts.apiUrl] : []).concat([
       'https://api.bitget.com',
@@ -36,6 +38,7 @@ export class PaperExchange extends EventEmitter {
     this._seq = 1;
     this._tickTimer = null;
     this._pollTimer = null;
+    this._persistEnabled = opts.persist !== false;
   }
 
   /** Shared-account equity = cash + all legs' unrealized. */
@@ -67,6 +70,7 @@ export class PaperExchange extends EventEmitter {
       this.prices.set(id, m.lastPrice || 100);
       this.realTarget.set(id, m.lastPrice || 100);
     }
+    this._restorePersistedBook();
     this._startLoops();
     return true;
   }
@@ -223,11 +227,17 @@ export class PaperExchange extends EventEmitter {
   async placeLimitOrder(o) {
     const id = `paper-${this._seq++}`;
     this.orders.set(id, { orderId: id, ...o });
+    this._persistBook();
     return { orderId: id };
   }
-  async cancelOrder(_m, orderId) { this.orders.delete(orderId); return true; }
+  async cancelOrder(_m, orderId) {
+    this.orders.delete(orderId);
+    this._persistBook();
+    return true;
+  }
   async cancelAll(marketId) {
     for (const [id, o] of this.orders) if (Number(o.marketId) === Number(marketId)) this.orders.delete(id);
+    this._persistBook();
     return true;
   }
   getOpenOrders(marketId) { return [...this.orders.values()].filter((o) => Number(o.marketId) === Number(marketId)); }
@@ -242,6 +252,7 @@ export class PaperExchange extends EventEmitter {
       orderId: String(orderId), marketId: Number(marketId), levelIndex, side,
       price: Number(price), sizeBase: Number(sizeBase), reduceOnly: false,
     });
+    this._persistBook();
   }
 
   getPosition(marketId) {
@@ -311,7 +322,11 @@ export class PaperExchange extends EventEmitter {
       const crossedBuy = o.side === 'buy' && cur <= o.price;
       const crossedSell = o.side === 'sell' && cur >= o.price;
       if (!crossedBuy && !crossedSell) continue;
-      if (o.reduceOnly && !this._reduces(marketId, o.side)) { this.orders.delete(o.orderId); continue; }
+      if (o.reduceOnly && !this._reduces(marketId, o.side)) {
+        this.orders.delete(o.orderId);
+        this._persistBook();
+        continue;
+      }
       this.orders.delete(o.orderId);
       this._applyFill(marketId, o.side, o.price, o.sizeBase);
       this.emit('fill', {
@@ -347,6 +362,86 @@ export class PaperExchange extends EventEmitter {
       } else { p.sizeBase = remaining; p.entryPrice = price; }
     }
     this.positions.set(marketId, p);
+    this._persistBook();
+  }
+
+  /** Snapshot keyed by symbol so marketId reshuffles across redeploys stay valid. */
+  _bookSnapshot() {
+    const nameOf = (id) => {
+      const m = this.markets.get(Number(id));
+      return String(m?.name || m?.displayName || '').toUpperCase();
+    };
+    return {
+      v: 1,
+      balance: this.balance,
+      realizedPnl: this.realizedPnl,
+      seq: this._seq,
+      positions: [...this.positions.entries()]
+        .filter(([, p]) => p && p.sizeBase)
+        .map(([id, p]) => ({
+          symbol: nameOf(id),
+          sizeBase: p.sizeBase,
+          entryPrice: p.entryPrice,
+        }))
+        .filter((r) => r.symbol),
+      orders: [...this.orders.values()]
+        .map((o) => ({
+          orderId: String(o.orderId),
+          symbol: nameOf(o.marketId),
+          levelIndex: o.levelIndex,
+          side: o.side,
+          price: Number(o.price),
+          sizeBase: Number(o.sizeBase),
+          reduceOnly: !!o.reduceOnly,
+          clientOrderId: o.clientOrderId,
+        }))
+        .filter((r) => r.symbol),
+    };
+  }
+
+  _persistBook() {
+    if (!this._persistEnabled) return;
+    try { savePaperBook(this._bookSnapshot()); } catch { /* ignore */ }
+  }
+
+  _restorePersistedBook() {
+    if (!this._persistEnabled) return;
+    const snap = loadPaperBook();
+    if (!snap || typeof snap !== 'object') return;
+    const byName = new Map();
+    for (const m of this.markets.values()) {
+      const n = String(m.name || m.displayName || '').toUpperCase();
+      if (n) byName.set(n, m.marketId);
+    }
+    if (Number.isFinite(Number(snap.balance))) this.balance = Number(snap.balance);
+    if (Number.isFinite(Number(snap.realizedPnl))) this.realizedPnl = Number(snap.realizedPnl);
+    if (Number.isFinite(Number(snap.seq)) && Number(snap.seq) > this._seq) this._seq = Number(snap.seq);
+
+    this.positions.clear();
+    for (const row of snap.positions || []) {
+      const id = byName.get(String(row.symbol || '').toUpperCase());
+      if (id == null || !row.sizeBase) continue;
+      this.positions.set(id, { sizeBase: Number(row.sizeBase), entryPrice: Number(row.entryPrice) || 0 });
+    }
+    this.orders.clear();
+    for (const row of snap.orders || []) {
+      const id = byName.get(String(row.symbol || '').toUpperCase());
+      if (id == null || !row.orderId) continue;
+      this.orders.set(String(row.orderId), {
+        orderId: String(row.orderId),
+        marketId: id,
+        levelIndex: row.levelIndex,
+        side: row.side,
+        price: Number(row.price),
+        sizeBase: Number(row.sizeBase),
+        reduceOnly: !!row.reduceOnly,
+        clientOrderId: row.clientOrderId,
+      });
+    }
+    console.log(
+      `[Paper] 已从磁盘恢复账本 balance=${this.balance.toFixed(2)} `
+      + `positions=${this.positions.size} orders=${this.orders.size}`,
+    );
   }
 }
 

@@ -14,9 +14,9 @@ function LocaleShell() {
     <ConfigProvider
       locale={lang === 'en' ? enUS : zhCN}
       theme={{
-        algorithm: theme.defaultAlgorithm,
+        algorithm: theme.darkAlgorithm,
         token: {
-          colorPrimary: nk.gold,
+          colorPrimary: nk.accent,
           colorSuccess: nk.green,
           colorError: nk.red,
           colorWarning: nk.gold,
@@ -25,8 +25,8 @@ function LocaleShell() {
           colorBgContainer: nk.surface,
           colorBorder: nk.border,
           colorText: nk.text,
-          colorTextSecondary: '#555B66',
-          borderRadius: 3,
+          colorTextSecondary: '#9AA3AF',
+          borderRadius: 6,
           fontFamily: '"Source Sans 3", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif',
           fontSize: 13,
         },
@@ -40,9 +40,9 @@ function LocaleShell() {
           },
           Menu: {
             itemBg: 'transparent',
-            itemSelectedBg: 'rgba(166, 124, 61, 0.12)',
-            itemSelectedColor: nk.gold,
-            itemHoverBg: 'rgba(27, 29, 34, 0.045)',
+            itemSelectedBg: 'rgba(46, 196, 182, 0.12)',
+            itemSelectedColor: nk.accent,
+            itemHoverBg: 'rgba(46, 196, 182, 0.05)',
           },
           Table: {
             headerBg: nk.surfaceLight,

@@ -45,6 +45,21 @@ export function getConfig() {
     process.env.HTTP_PROXY ||
     '';
 
+  // Durable file wins when present (survives redeploy). Env is first-boot seed only —
+  // Railway often has BG_SYMBOLS="" or a stale seed that would otherwise wipe the roster.
+  let symbolsRaw = '';
+  try {
+    const dataDir = process.env.WANGGE_DATA_DIR || process.env.DATA_DIR || '';
+    const file = path.join(dataDir ? path.resolve(dataDir) : root, 'wangge_symbols.txt');
+    if (fs.existsSync(file)) {
+      const raw = fs.readFileSync(file, 'utf8').trim();
+      if (raw) symbolsRaw = raw;
+    }
+  } catch { /* ignore */ }
+  if (!String(symbolsRaw || '').trim()) {
+    symbolsRaw = process.env.BG_SYMBOLS || process.env.BITGET_SYMBOLS || '';
+  }
+
   const bgNet = (process.env.BG_NETWORK || process.env.BITGET_NETWORK || 'mainnet').toLowerCase();
   const bg = {
     mode: (process.env.BG_MODE || process.env.BITGET_MODE || 'paper').toLowerCase() === 'live' ? 'live' : 'paper',
@@ -58,11 +73,7 @@ export function getConfig() {
     startBalance: Number(process.env.PAPER_BALANCE || 15000),
     proxy: process.env.BITGET_PROXY || globalProxy,
     // Empty = rely on scout / UI to populate (no seed BTCUSDT).
-    symbols: parseSymbols(
-      process.env.BG_SYMBOLS != null
-        ? process.env.BG_SYMBOLS
-        : (process.env.BITGET_SYMBOLS || ''),
-    ),
+    symbols: parseSymbols(symbolsRaw),
   };
 
   return {
